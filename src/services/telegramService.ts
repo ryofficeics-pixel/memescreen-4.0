@@ -336,7 +336,7 @@ export class TelegramService {
   }
 
   // ── Send alert for strong-buy token ─────────────────────────────────────
-  async sendAlert(token: ScreenedTokenV31, alertId: number): Promise<boolean> {
+  async sendAlert(token: ScreenedTokenV40, alertId: number): Promise<boolean> {
     if (!this.env.ENABLE_TELEGRAM) return false;
     if (this.paused)              return false;
 

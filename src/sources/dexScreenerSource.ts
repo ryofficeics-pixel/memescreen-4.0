@@ -69,6 +69,7 @@ export class DexScreenerSource {
       symbol:        p.baseToken?.symbol  ?? "UNKNOWN",
       name:          p.baseToken?.name    ?? "Unknown",
       source:        this.name,
+      sources:       [this.name],
       priceUsd:      Number(p.priceUsd ?? 0),
       liquidityUsd:  Number(p.liquidity?.usd ?? 0),
       volume24hUsd:  Number(p.volume?.h24 ?? 0),

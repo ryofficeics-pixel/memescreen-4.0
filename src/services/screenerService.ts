@@ -314,7 +314,3 @@ export class ScreenerService {
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
-}
