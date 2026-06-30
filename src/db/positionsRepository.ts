@@ -15,6 +15,7 @@ export class PositionsRepository {
         amount_sol  REAL NOT NULL,
         sl_pct      REAL,
         tp_pct      REAL,
+        notes       TEXT,
         opened_at   TEXT DEFAULT (datetime('now')),
         status      TEXT DEFAULT 'open'
       );
@@ -30,6 +31,7 @@ export class PositionsRepository {
         pnl_pct      REAL,
         pnl_sol      REAL,
         reason       TEXT DEFAULT 'manual',
+        notes        TEXT,
         opened_at    TEXT,
         closed_at    TEXT DEFAULT (datetime('now'))
       );
@@ -38,15 +40,25 @@ export class PositionsRepository {
       CREATE INDEX IF NOT EXISTS idx_closed_positions_addr ON closed_positions(address);
       CREATE INDEX IF NOT EXISTS idx_closed_positions_at   ON closed_positions(closed_at DESC);
     `);
+
+    // 4.0 migration: add notes column if upgrading from 3.1
+    const posCols = (this.db.prepare("PRAGMA table_info(positions)").all() as { name: string }[]).map(r => r.name);
+    if (!posCols.includes("notes")) {
+      this.db.exec(`ALTER TABLE positions ADD COLUMN notes TEXT`);
+    }
+    const closedCols = (this.db.prepare("PRAGMA table_info(closed_positions)").all() as { name: string }[]).map(r => r.name);
+    if (!closedCols.includes("notes")) {
+      this.db.exec(`ALTER TABLE closed_positions ADD COLUMN notes TEXT`);
+    }
   }
 
   // ── Open positions ────────────────────────────────────────────────────────
-  openPosition(p: Omit<Position, "id" | "status" | "openedAt">): PositionRow {
+  openPosition(p: Omit<Position, "id" | "openedAt" | "status"> & { notes?: string }): PositionRow {
     const id = randomUUID();
     this.db.prepare(`
-      INSERT INTO positions (id, address, symbol, entry_price, amount_sol, sl_pct, tp_pct)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, p.address, p.symbol, p.entryPrice, p.amountSol, p.slPct ?? null, p.tpPct ?? null);
+      INSERT INTO positions (id, address, symbol, entry_price, amount_sol, sl_pct, tp_pct, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, p.address, p.symbol, p.entryPrice, p.amountSol, p.slPct ?? null, p.tpPct ?? null, p.notes ?? null);
     return this.getPosition(id)!;
   }
 
@@ -80,22 +92,19 @@ export class PositionsRepository {
     const pnlSol = pnlPct !== null ? closedAmount * (pnlPct / 100) : null;
     const closedId = randomUUID();
 
-    // Record closed slice
     this.db.prepare(`
       INSERT INTO closed_positions
-        (id, position_id, address, symbol, entry_price, exit_price, amount_sol, pnl_pct, pnl_sol, reason, opened_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, position_id, address, symbol, entry_price, exit_price, amount_sol, pnl_pct, pnl_sol, reason, notes, opened_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       closedId, id, pos.address, pos.symbol,
       pos.entry_price, exitPrice, closedAmount,
-      pnlPct, pnlSol, reason, pos.opened_at
+      pnlPct, pnlSol, reason, pos.notes ?? null, pos.opened_at
     );
 
     if (fraction >= 0.999) {
-      // Full close
       this.db.prepare(`UPDATE positions SET status = 'closed' WHERE id = ?`).run(id);
     } else {
-      // Partial close — reduce remaining amount
       this.db.prepare(
         `UPDATE positions SET amount_sol = amount_sol - ? WHERE id = ?`
       ).run(closedAmount, id);
@@ -113,9 +122,11 @@ export class PositionsRepository {
 
     for (const pos of positions) {
       const price = currentPrices.get(pos.address);
-      if (price === undefined || pos.entry_price <= 0) continue;
+      if (price === undefined) continue;
 
-      const pnlPct = ((price - pos.entry_price) / pos.entry_price) * 100;
+      const pnlPct = pos.entry_price > 0
+        ? ((price - pos.entry_price) / pos.entry_price) * 100
+        : 0;
 
       if (pos.sl_pct !== null && pnlPct <= -Math.abs(pos.sl_pct)) {
         const result = this.closePosition(pos.id, 1, price, "stop-loss");
@@ -136,15 +147,49 @@ export class PositionsRepository {
     ).all(limit) as ClosedPositionRow[];
   }
 
-  getPnlStats(): { totalPnlSol: number; winRate: number; totalTrades: number } {
-    const rows = this.db.prepare(
-      `SELECT pnl_sol, pnl_pct FROM closed_positions WHERE pnl_sol IS NOT NULL`
-    ).all() as { pnl_sol: number; pnl_pct: number }[];
+  getPnlStats(): {
+    totalPnlSol:    number;
+    realizedPnlSol: number;
+    winRate:        number;
+    totalTrades:    number;
+    bestTradePct:   number | null;
+    worstTradePct:  number | null;
+    avgHoldMinutes: number | null;
+    solAtRisk:      number;
+  } {
+    const closed = this.db.prepare(
+      `SELECT pnl_sol, pnl_pct, opened_at, closed_at FROM closed_positions WHERE pnl_sol IS NOT NULL`
+    ).all() as { pnl_sol: number; pnl_pct: number; opened_at: string; closed_at: string }[];
 
-    const totalPnlSol  = rows.reduce((s, r) => s + r.pnl_sol, 0);
-    const wins         = rows.filter(r => r.pnl_pct >= 0).length;
-    const winRate      = rows.length > 0 ? (wins / rows.length) * 100 : 0;
+    const open = this.listOpenPositions();
+    const solAtRisk = open.reduce((s, p) => s + p.amount_sol, 0);
 
-    return { totalPnlSol, winRate, totalTrades: rows.length };
+    const realizedPnlSol = closed.reduce((s, r) => s + r.pnl_sol, 0);
+    const wins           = closed.filter(r => r.pnl_pct >= 0).length;
+    const winRate        = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+    const bestTradePct   = closed.length > 0 ? Math.max(...closed.map(r => r.pnl_pct)) : null;
+    const worstTradePct  = closed.length > 0 ? Math.min(...closed.map(r => r.pnl_pct)) : null;
+
+    const holdTimes = closed
+      .map(r => {
+        const o = new Date(r.opened_at).getTime();
+        const c = new Date(r.closed_at).getTime();
+        return isNaN(o) || isNaN(c) ? null : (c - o) / 60000;
+      })
+      .filter((v): v is number => v !== null);
+    const avgHoldMinutes = holdTimes.length > 0
+      ? holdTimes.reduce((s, v) => s + v, 0) / holdTimes.length
+      : null;
+
+    return {
+      totalPnlSol:    realizedPnlSol,
+      realizedPnlSol,
+      winRate,
+      totalTrades:    closed.length,
+      bestTradePct,
+      worstTradePct,
+      avgHoldMinutes,
+      solAtRisk,
+    };
   }
 }

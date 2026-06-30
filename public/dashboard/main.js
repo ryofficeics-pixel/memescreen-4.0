@@ -52,11 +52,14 @@ function handleMsg({ type, data }) {
   switch (type) {
     case "INITIAL_STATE":
       allTokens = normalizeList([...(data.tokens || []), ...(data.watchTokens || [])]);
-      renderTable();
       updateStats(data.lastScan);
       loadAlerts(data.alerts || []);
       refreshTgStatus(data.alertsLastHour);
       startCountdown();
+      // Start on positions tab — load positions and show positionsView
+      loadPositions();
+      document.getElementById("positionsView").style.display = "flex";
+      document.getElementById("tableWrap").style.display     = "none";
       break;
 
     case "SCAN_START":
@@ -292,6 +295,9 @@ function renderDetail(t) {
 }
 
 // ─── Paper trading ───────────────────────────────────────────────────────────
+let pnlPollTimer = null;
+let unrealizedPnl = 0;
+
 async function loadPositions() {
   try {
     const r = await fetch(`${API_URL}/positions`);
@@ -299,96 +305,190 @@ async function loadPositions() {
     openPositions   = d.open   || [];
     closedPositions = d.closed || [];
     pnlStats        = d.stats  || pnlStats;
-    renderPnlBar();
-    if (currentTab === "positions") renderPositions();
+    renderPortfolioHeader();
+    renderOpenPositions();
+    renderJournal();
+    schedulePnlPoll();
   } catch { /* backend offline — silently skip */ }
 }
 
-function renderPnlBar() {
-  const sign = pnlStats.totalPnlSol >= 0 ? "+" : "";
-  const el = document.getElementById("pnlTotal");
-  el.textContent = `${sign}${pnlStats.totalPnlSol.toFixed(4)} SOL`;
-  el.style.color = pnlStats.totalPnlSol >= 0 ? "var(--lime)" : "var(--red)";
-  document.getElementById("pnlWinRate").textContent = `${pnlStats.winRate.toFixed(1)}%`;
-  document.getElementById("pnlTrades").textContent  = pnlStats.totalTrades;
-  document.getElementById("pnlOpen").textContent    = openPositions.length;
+function renderPortfolioHeader() {
+  const s  = pnlStats;
+  const rz = s.realizedPnlSol ?? s.totalPnlSol ?? 0;
+  const rzColor = rz >= 0 ? "var(--lime)" : "var(--red)";
+  const rzSign  = rz >= 0 ? "+" : "";
+
+  el("portRealized").textContent = `${rzSign}${rz.toFixed(4)} SOL`;
+  el("portRealized").style.color = rzColor;
+  el("portWinRate").textContent  = `${(s.winRate ?? 0).toFixed(1)}% win rate`;
+  el("portAtRisk").textContent   = `${(s.solAtRisk ?? 0).toFixed(3)} SOL`;
+  el("portOpenCount").textContent= `${openPositions.length} open positions`;
+  el("portTrades").textContent   = s.totalTrades ?? 0;
+  el("portBest").textContent     = s.bestTradePct  != null ? `best +${s.bestTradePct.toFixed(1)}%`  : "best —";
+  el("portWorst").textContent    = s.worstTradePct != null ? `worst ${s.worstTradePct.toFixed(1)}%` : "worst —";
+
+  // avg hold time
+  const ah = s.avgHoldMinutes;
+  el("portAvgHold").textContent = ah != null ? (ah < 60 ? `${Math.round(ah)}m` : `${(ah/60).toFixed(1)}h`) : "—";
+
+  // unrealized from poll
+  const urColor = unrealizedPnl >= 0 ? "var(--lime)" : "var(--red)";
+  const urSign  = unrealizedPnl >= 0 ? "+" : "";
+  el("portUnrealized").textContent = unrealizedPnl !== 0 ? `${urSign}${unrealizedPnl.toFixed(4)} SOL` : "— SOL";
+  el("portUnrealized").style.color = unrealizedPnl !== 0 ? urColor : "var(--text)";
 }
 
-function renderPositions() {
-  const panel = document.getElementById("positionsPanel");
-  const rows = [];
+function renderOpenPositions() {
+  const grid = el("openPositionsGrid");
+  el("openCount").textContent = openPositions.length;
 
-  if (openPositions.length === 0 && closedPositions.length === 0) {
-    panel.innerHTML = `<div class="empty">No paper positions yet. Select a token and open one.</div>`;
+  if (openPositions.length === 0) {
+    grid.innerHTML = `<div style="color:var(--dim);font-size:11px;padding:12px;grid-column:1/-1">No open positions — buy from Alerts tab or use Quick Buy above.</div>`;
     return;
   }
 
-  if (openPositions.length > 0) {
-    rows.push(`<div class="section-title" style="padding:0 4px">Open (${openPositions.length})</div>`);
-    rows.push(...openPositions.map(p => `
-      <div class="position-card">
-        <div class="pos-head">
-          <span class="pos-sym">$${p.symbol}</span>
-          <span class="pos-pnl" style="color:var(--dim)">${p.amount_sol} SOL</span>
-        </div>
-        <div class="pos-meta">
-          Entry: $${fmtPrice(p.entry_price)}<br/>
-          SL: ${p.sl_pct ? `-${p.sl_pct}%` : "none"} · TP: ${p.tp_pct ? `+${p.tp_pct}%` : "none"}<br/>
-          Opened: ${fmtTime(p.opened_at)}
-        </div>
-        <div class="pos-actions">
-          <button onclick="paperSell('${p.id}', 0.5)">Sell 50%</button>
-          <button onclick="paperSell('${p.id}', 1)">Sell 100%</button>
-        </div>
-      </div>`));
-  }
-
-  if (closedPositions.length > 0) {
-    rows.push(`<div class="section-title" style="padding:8px 4px 0">Closed (${closedPositions.length})</div>`);
-    rows.push(...closedPositions.map(p => {
-      const pnlColor = (p.pnl_pct ?? 0) >= 0 ? "var(--lime)" : "var(--red)";
-      const pnlSign  = (p.pnl_pct ?? 0) >= 0 ? "+" : "";
-      return `
-      <div class="position-card closed">
-        <div class="pos-head">
-          <span class="pos-sym">$${p.symbol}</span>
-          <span class="pos-pnl" style="color:${pnlColor}">${pnlSign}${p.pnl_pct?.toFixed(2) ?? "—"}%</span>
-        </div>
-        <div class="pos-meta">
-          $${fmtPrice(p.entry_price)} → $${fmtPrice(p.exit_price)} · ${p.reason}<br/>
-          PnL: ${pnlSign}${p.pnl_sol?.toFixed(4) ?? "—"} SOL · ${fmtTime(p.closed_at)}
-        </div>
-      </div>`;
-    }));
-  }
-
-  panel.innerHTML = rows.join("");
+  grid.innerHTML = openPositions.map(p => {
+    const slTxt = p.sl_pct  ? `-${p.sl_pct}%`  : "—";
+    const tpTxt = p.tp_pct  ? `+${p.tp_pct}%`  : "—";
+    const holdMin = Math.floor((Date.now() - new Date(p.opened_at).getTime()) / 60000);
+    const holdTxt = holdMin < 60 ? `${holdMin}m` : `${(holdMin/60).toFixed(1)}h`;
+    return `
+    <div class="pos-card" id="poscard-${p.id}">
+      <div class="pos-card-head">
+        <span class="pos-card-sym">$${p.symbol}</span>
+        <span class="pos-card-pnl" id="pnl-${p.id}" style="color:var(--dim)">loading…</span>
+      </div>
+      <div class="pos-card-grid">
+        <div><div class="pos-card-lbl">Entry</div><div class="pos-card-val">$${fmtPrice(p.entry_price)}</div></div>
+        <div><div class="pos-card-lbl">Size</div><div class="pos-card-val">${p.amount_sol} SOL</div></div>
+        <div><div class="pos-card-lbl">SL / TP</div><div class="pos-card-val">${slTxt} / ${tpTxt}</div></div>
+        <div><div class="pos-card-lbl">Hold</div><div class="pos-card-val">${holdTxt}</div></div>
+        ${p.notes ? `<div style="grid-column:1/-1"><div class="pos-card-lbl">Note</div><div class="pos-card-val" style="color:var(--dim);font-size:10px">${p.notes}</div></div>` : ""}
+      </div>
+      <div class="pos-card-actions">
+        <button class="pos-btn half"   onclick="paperSell('${p.id}',0.25)">Sell 25%</button>
+        <button class="pos-btn half"   onclick="paperSell('${p.id}',0.5)">Sell 50%</button>
+        <button class="pos-btn danger" onclick="paperSell('${p.id}',1)">Close 100%</button>
+      </div>
+    </div>`;
+  }).join("");
 }
 
-async function paperBuy(address, symbol) {
-  const amountSol = parseFloat(document.getElementById("tradeAmount")?.value || "0");
-  const slPct     = parseFloat(document.getElementById("tradeSl")?.value || "");
-  const tpPct     = parseFloat(document.getElementById("tradeTp")?.value || "");
+function renderJournal() {
+  const tbody = el("journalTbody");
+  el("journalCount").textContent = closedPositions.length;
 
-  if (!amountSol || amountSol <= 0) return toast("❌ Enter a valid SOL amount", true);
+  if (closedPositions.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="9" style="color:var(--dim);text-align:center;padding:20px">No closed trades yet</td></tr>`;
+    return;
+  }
 
+  tbody.innerHTML = closedPositions.map(p => {
+    const pct     = p.pnl_pct ?? 0;
+    const sol     = p.pnl_sol ?? 0;
+    const color   = pct >= 0 ? "var(--lime)" : "var(--red)";
+    const sign    = pct >= 0 ? "+" : "";
+    const holdMs  = new Date(p.closed_at).getTime() - new Date(p.opened_at).getTime();
+    const holdMin = Math.floor(holdMs / 60000);
+    const holdTxt = holdMin < 60 ? `${holdMin}m` : holdMin < 1440 ? `${(holdMin/60).toFixed(1)}h` : `${(holdMin/1440).toFixed(1)}d`;
+    const reasonClass = `reason-${p.reason.replace(/ /g,"-")}`;
+    return `<tr>
+      <td style="font-weight:700">$${p.symbol}</td>
+      <td style="font-family:monospace">$${fmtPrice(p.entry_price)}</td>
+      <td style="font-family:monospace">$${fmtPrice(p.exit_price)}</td>
+      <td>${p.amount_sol} SOL</td>
+      <td style="color:${color};font-weight:700">${sign}${pct.toFixed(2)}%</td>
+      <td style="color:${color};font-weight:700">${sign}${sol.toFixed(4)}</td>
+      <td style="color:var(--dim)">${holdTxt}</td>
+      <td><span class="reason-badge ${reasonClass}">${p.reason}</span></td>
+      <td style="color:var(--dim)">${fmtTime(p.closed_at)}</td>
+    </tr>`;
+  }).join("");
+}
+
+// Live unrealized P&L — polls all open positions concurrently every 30s
+async function schedulePnlPoll() {
+  clearTimeout(pnlPollTimer);
+  if (openPositions.length === 0) { unrealizedPnl = 0; renderPortfolioHeader(); return; }
+  try {
+    const results = await Promise.allSettled(
+      openPositions.map(p => fetch(`${API_URL}/positions/${p.id}/pnl`).then(r => r.json()))
+    );
+    unrealizedPnl = 0;
+    results.forEach((r, i) => {
+      if (r.status !== "fulfilled") return;
+      const d = r.value;
+      unrealizedPnl += d.pnlSol ?? 0;
+      // Update individual card P&L display
+      const pnlEl = document.getElementById(`pnl-${openPositions[i]?.id}`);
+      const card  = document.getElementById(`poscard-${openPositions[i]?.id}`);
+      if (pnlEl && d.pnlPct != null) {
+        const color = d.pnlPct >= 0 ? "var(--lime)" : "var(--red)";
+        const sign  = d.pnlPct >= 0 ? "+" : "";
+        pnlEl.textContent = `${sign}${d.pnlPct.toFixed(2)}% / ${sign}${d.pnlSol.toFixed(4)} SOL`;
+        pnlEl.style.color = color;
+        if (card) { card.classList.toggle("profit", d.pnlPct >= 0); card.classList.toggle("loss", d.pnlPct < 0); }
+      }
+    });
+    renderPortfolioHeader();
+  } catch {}
+  pnlPollTimer = setTimeout(schedulePnlPoll, 30000);
+}
+
+// Quick Buy from bar
+async function quickBuy() {
+  const address = el("qbAddr").value.trim();
+  const amountSol = parseFloat(el("qbSol").value);
+  const slPct     = parseFloat(el("qbSl").value);
+  const tpPct     = parseFloat(el("qbTp").value);
+  const status    = el("qbStatus");
+
+  if (!address) { status.textContent = "⚠ Enter token address"; status.style.color = "var(--yellow)"; return; }
+  if (!amountSol || amountSol <= 0) { status.textContent = "⚠ Enter SOL amount"; status.style.color = "var(--yellow)"; return; }
+
+  status.textContent = "⏳ Opening…"; status.style.color = "var(--dim)";
   try {
     const r = await fetch(`${API_URL}/positions/buy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        address, amountSol,
-        slPct: isNaN(slPct) ? undefined : slPct,
-        tpPct: isNaN(tpPct) ? undefined : tpPct,
-      }),
+      body: JSON.stringify({ address, amountSol, slPct: isNaN(slPct) ? undefined : slPct, tpPct: isNaN(tpPct) ? undefined : tpPct }),
+    });
+    const d = await r.json();
+    if (!r.ok) { status.textContent = `❌ ${d.error || "Failed"}`; status.style.color = "var(--red)"; return; }
+    status.textContent = `✅ $${d.position.symbol} opened @ $${fmtPrice(d.position.entry_price)}`;
+    status.style.color = "var(--lime)";
+    el("qbAddr").value = "";
+    await loadPositions();
+    // Switch to positions tab
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".tab")[0].classList.add("active");
+    switchTab("positions", document.querySelectorAll(".tab")[0]);
+  } catch { status.textContent = "❌ Backend unreachable"; status.style.color = "var(--red)"; }
+}
+
+// Quick-fill address from token row click
+function fillQuickBuy(address, symbol) {
+  el("qbAddr").value = address;
+  el("qbStatus").textContent = `$${symbol} selected`;
+  el("qbStatus").style.color = "var(--blue)";
+}
+
+async function paperBuy(address, symbol) {
+  const amountSol = parseFloat(el("qbSol")?.value || "0.5");
+  const slPct     = parseFloat(el("qbSl")?.value  || "20");
+  const tpPct     = parseFloat(el("qbTp")?.value  || "50");
+  if (!amountSol || amountSol <= 0) return toast("❌ Enter a valid SOL amount", true);
+  try {
+    const r = await fetch(`${API_URL}/positions/buy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address, amountSol, slPct: isNaN(slPct) ? undefined : slPct, tpPct: isNaN(tpPct) ? undefined : tpPct }),
     });
     const d = await r.json();
     if (!r.ok) return toast(`❌ ${d.error || "Failed to open position"}`, true);
     toast(`✅ Opened $${symbol} — ${amountSol} SOL @ $${fmtPrice(d.position.entry_price)}`);
-    loadPositions();
-  } catch {
-    toast("❌ Backend unreachable", true);
-  }
+    await loadPositions();
+  } catch { toast("❌ Backend unreachable", true); }
 }
 
 async function paperSell(positionId, fraction) {
@@ -402,12 +502,12 @@ async function paperSell(positionId, fraction) {
     if (!r.ok) return toast(`❌ ${d.error || "Sell failed"}`, true);
     const c = d.closed;
     const pnlEmoji = (c.pnl_pct ?? 0) >= 0 ? "🟢" : "🔴";
-    toast(`${pnlEmoji} Sold $${c.symbol} (${(fraction*100).toFixed(0)}%): ${c.pnl_pct?.toFixed(2) ?? "—"}%`);
-    loadPositions();
-  } catch {
-    toast("❌ Backend unreachable", true);
-  }
+    toast(`${pnlEmoji} Sold $${c.symbol} (${(fraction*100).toFixed(0)}%): ${c.pnl_pct != null ? (c.pnl_pct >= 0 ? "+" : "") + c.pnl_pct.toFixed(2) + "%" : "—"}`);
+    await loadPositions();
+  } catch { toast("❌ Backend unreachable", true); }
 }
+
+function el(id) { return document.getElementById(id); }
 
 // ─── Alert feed ──────────────────────────────────────────────────────────────
 function loadAlerts(alerts) {
@@ -461,10 +561,17 @@ function updateStats(s) {
   document.getElementById("sAlerts").textContent  = s.alertsCount ?? s.alerts ?? "—";
   document.getElementById("sWatch").textContent   = s.watchCount  ?? s.watch  ?? "—";
   document.getElementById("sAvoid").textContent   = s.avoidCount  ?? s.avoid  ?? "—";
+  // Update portfolio header scan duration
+  const dur = s.durationMs != null ? `last scan ${(s.durationMs/1000).toFixed(1)}s` : "last scan —s";
+  const scanDurEl = document.getElementById("scanDuration");
+  if (scanDurEl) scanDurEl.textContent = dur;
 }
 
 function refreshTgStatus(alertsH) {
   document.getElementById("tgSub").textContent = `Alerts this hour: ${alertsH ?? 0}`;
+  // Also update portfolio header alerts/hr
+  const el = document.getElementById("alertsHour");
+  if (el) el.textContent = alertsH ?? "—";
 }
 
 function startCountdown() {
@@ -479,23 +586,23 @@ function startCountdown() {
   }, 1000);
 }
 
-function switchTab(tab, el) {
+function switchTab(tab, tabEl) {
   currentTab = tab;
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-  el.classList.add("active");
+  tabEl.classList.add("active");
   selectedAddr = null;
   document.getElementById("detailPanel").classList.remove("open");
 
   const tableWrap     = document.getElementById("tableWrap");
-  const positionsPanel= document.getElementById("positionsPanel");
+  const positionsView = document.getElementById("positionsView");
 
   if (tab === "positions") {
-    tableWrap.style.display = "none";
-    positionsPanel.style.display = "flex";
+    tableWrap.style.display     = "none";
+    positionsView.style.display = "flex";
     loadPositions();
   } else {
-    tableWrap.style.display = "block";
-    positionsPanel.style.display = "none";
+    tableWrap.style.display     = "block";
+    positionsView.style.display = "none";
     renderTable();
   }
 }

@@ -204,15 +204,16 @@ export interface JupiterCheckResult {
 
 // ─── DB rows for positions ─────────────────────────────────────────────────
 export interface PositionRow {
-  id:           string;
-  address:      string;
-  symbol:       string;
-  entry_price:  number;
-  amount_sol:   number;
-  sl_pct:       number | null;
-  tp_pct:       number | null;
-  opened_at:    string;
-  status:       string;
+  id:          string;
+  address:     string;
+  symbol:      string;
+  entry_price: number;
+  amount_sol:  number;
+  sl_pct:      number | null;
+  tp_pct:      number | null;
+  notes:       string | null;
+  opened_at:   string;
+  status:      string;
 }
 
 export interface ClosedPositionRow {

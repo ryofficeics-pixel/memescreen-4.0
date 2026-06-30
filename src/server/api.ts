@@ -79,7 +79,7 @@ export async function buildServer(
     alertsLastHour:  repo.countAlertsLastHour(),
     wsClients:       wsClients.size,
     uptime:          process.uptime(),
-    version:         "3.1.0",
+    version:         "4.0.0",
   }));
 
   app.get<{ Querystring: { limit?: string; decision?: string; tier?: string } }>(
@@ -134,16 +134,30 @@ export async function buildServer(
 
   // ── Paper trading ─────────────────────────────────────────────────────
 
+  // GET /api/positions — full portfolio snapshot
   app.get("/api/positions", async () => ({
     open:   repo.positions.listOpenPositions(),
-    closed: repo.positions.listClosedPositions(50),
+    closed: repo.positions.listClosedPositions(100),
     stats:  repo.positions.getPnlStats(),
   }));
 
+  // GET /api/positions/:id/pnl — live unrealized P&L for one open position
+  app.get<{ Params: { id: string } }>("/api/positions/:id/pnl", async (req, reply) => {
+    const pos = repo.positions.getPosition(req.params.id);
+    if (!pos) return reply.status(404).send({ error: "Position not found" });
+    const screened = await screener.checkAddress(pos.address);
+    if (!screened) return reply.status(502).send({ error: "Could not fetch price" });
+    const currentPrice = screened.priceUsd;
+    const pnlPct  = pos.entry_price > 0 ? ((currentPrice - pos.entry_price) / pos.entry_price) * 100 : 0;
+    const pnlSol  = pos.amount_sol * (pnlPct / 100);
+    const holdMin = Math.floor((Date.now() - new Date(pos.opened_at).getTime()) / 60000);
+    return { id: pos.id, symbol: pos.symbol, currentPrice, pnlPct, pnlSol, holdMin };
+  });
+
   app.post<{
-    Body: { address: string; amountSol: number; slPct?: number; tpPct?: number };
+    Body: { address: string; amountSol: number; slPct?: number; tpPct?: number; notes?: string };
   }>("/api/positions/buy", async (req, reply) => {
-    const { address, amountSol, slPct, tpPct } = req.body ?? {};
+    const { address, amountSol, slPct, tpPct, notes } = req.body ?? {};
     if (!address || !amountSol || amountSol <= 0) {
       return reply.status(400).send({ error: "address and amountSol (>0) required" });
     }
@@ -152,12 +166,13 @@ export async function buildServer(
     if (!screened) return reply.status(404).send({ error: "Token not found on DexScreener" });
 
     const pos = repo.positions.openPosition({
-      address: screened.address,
-      symbol:  screened.symbol,
+      address:    screened.address,
+      symbol:     screened.symbol,
       entryPrice: screened.priceUsd,
       amountSol,
-      slPct: slPct ?? null,
-      tpPct: tpPct ?? null,
+      slPct:  slPct  ?? null,
+      tpPct:  tpPct  ?? null,
+      notes:  notes  ?? undefined,
     });
 
     broadcast("POSITION_OPENED", pos);

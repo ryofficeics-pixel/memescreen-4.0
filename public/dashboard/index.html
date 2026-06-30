@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MemeScreener 3.1</title>
+<title>MemeScreener 4.0</title>
 <style>
 :root {
   --bg:     #0d1117;
@@ -184,25 +184,106 @@ tr.selected td { background: rgba(63,185,80,.06); }
 .tier-C { color: var(--dim);    border-color: var(--border);       background: var(--bg3); }
 .tier-REJECT { color: var(--red); border-color: rgba(248,81,73,.3); background: rgba(248,81,73,.08); }
 
-/* PnL summary bar */
-.pnl-bar {
-  display: flex; gap: 16px; padding: 8px 14px;
-  background: var(--bg3); border-bottom: 1px solid var(--border);
-  font-size: 11px;
+/* ── PORTFOLIO HEADER ── */
+.portfolio-header {
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 1px; background: var(--border);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
-.pnl-item { display: flex; gap: 6px; align-items: baseline; }
-.pnl-label { color: var(--dim); }
-.pnl-val { font-weight: 700; }
+.port-stat {
+  padding: 10px 14px; background: var(--bg2);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.port-stat-lbl { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: .1em; }
+.port-stat-val { font-size: 16px; font-weight: 700; line-height: 1; }
+.port-stat-sub { font-size: 9px; color: var(--dim); }
 
-/* Position cards */
-.position-list { padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; }
-.position-card {
-  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 12px;
+/* ── POSITION CARDS GRID ── */
+.positions-view { display: flex; flex-direction: column; overflow: hidden; flex: 1; }
+.positions-section-title {
+  padding: 8px 14px 4px;
+  font-size: 9px; font-weight: 700; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--dim);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2); flex-shrink: 0;
 }
-.position-card.closed { opacity: .7; }
-.pos-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-.pos-sym { font-weight: 700; font-size: 12px; }
+.open-positions-grid {
+  padding: 10px; display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px; overflow-y: auto; max-height: 280px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.pos-card {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px;
+  transition: border-color .2s;
+}
+.pos-card:hover { border-color: var(--blue); }
+.pos-card.profit { border-left: 3px solid var(--lime); }
+.pos-card.loss   { border-left: 3px solid var(--red); }
+.pos-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.pos-card-sym  { font-weight: 700; font-size: 13px; }
+.pos-card-pnl  { font-weight: 700; font-size: 13px; }
+.pos-card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin-bottom: 10px; }
+.pos-card-lbl  { font-size: 9px; color: var(--dim); }
+.pos-card-val  { font-size: 11px; font-weight: 600; }
+.pos-card-actions { display: flex; gap: 6px; }
+.pos-btn {
+  flex: 1; padding: 5px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--bg);
+  color: var(--text); font-family: var(--font); font-size: 10px;
+  cursor: pointer; transition: .15s;
+}
+.pos-btn:hover { background: var(--bg2); }
+.pos-btn.danger { border-color: rgba(248,81,73,.4); color: var(--red); }
+.pos-btn.danger:hover { background: rgba(248,81,73,.08); }
+.pos-btn.half   { border-color: rgba(210,153,34,.4); color: var(--yellow); }
+.pos-btn.half:hover { background: rgba(210,153,34,.08); }
+
+/* ── QUICK BUY PANEL ── */
+.quick-buy-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; background: var(--bg2);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.quick-buy-bar input, .quick-buy-bar select {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); border-radius: 5px;
+  padding: 4px 8px; font-family: var(--font); font-size: 11px;
+  outline: none;
+}
+.quick-buy-bar input:focus, .quick-buy-bar select:focus { border-color: var(--blue); }
+.quick-buy-label { font-size: 10px; color: var(--dim); white-space: nowrap; }
+.input-addr { flex: 1; min-width: 200px; }
+.input-sol  { width: 70px; }
+.input-sl   { width: 60px; }
+.input-tp   { width: 60px; }
+
+/* ── TRADE JOURNAL ── */
+.journal-wrap { flex: 1; overflow-y: auto; }
+.journal-table { width: 100%; border-collapse: collapse; }
+.journal-table th {
+  padding: 6px 10px; font-size: 9px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--dim);
+  text-align: left; border-bottom: 1px solid var(--border);
+  background: var(--bg2); position: sticky; top: 0;
+}
+.journal-table td { padding: 6px 10px; border-bottom: 1px solid rgba(48,54,61,.4); font-size: 11px; }
+.journal-table tr:hover td { background: var(--bg2); }
+.reason-badge {
+  display: inline-block; padding: 1px 6px; border-radius: 99px;
+  font-size: 9px; font-weight: 700; letter-spacing: .05em;
+}
+.reason-manual     { color: var(--blue);   background: rgba(88,166,255,.1);  border: 1px solid rgba(88,166,255,.3); }
+.reason-stop-loss  { color: var(--red);    background: rgba(248,81,73,.08);  border: 1px solid rgba(248,81,73,.3); }
+.reason-take-profit{ color: var(--lime);   background: rgba(63,185,80,.1);   border: 1px solid rgba(63,185,80,.3); }
+.reason-partial    { color: var(--yellow); background: rgba(210,153,34,.08); border: 1px solid rgba(210,153,34,.3); }
+
+/* ── SOURCE BADGES ── */
+.source-badges { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; }
+.source-badge  { font-size: 10px; }
+.multi-source-star { font-size: 10px; }
 .pos-pnl { font-size: 12px; font-weight: 700; }
 .pos-meta { font-size: 10px; color: var(--dim); line-height: 1.6; }
 .pos-actions { display: flex; gap: 6px; margin-top: 8px; }
@@ -275,7 +356,7 @@ tr.selected td { background: rgba(63,185,80,.06); }
 
   <!-- TOPBAR -->
   <div class="topbar">
-    <div class="brand">⚡ MEMESCREENER 3.1</div>
+    <div class="brand">⚡ MEMESCREENER 4.0</div>
     <div class="topbar-right">
       <div class="status-pill">
         <div class="dot idle" id="scanDot"></div>
@@ -334,23 +415,50 @@ tr.selected td { background: rgba(63,185,80,.06); }
     <div class="center">
 
       <!-- PnL summary -->
-      <div class="pnl-bar">
-        <div class="pnl-item"><span class="pnl-label">Paper PnL:</span><span class="pnl-val" id="pnlTotal">— SOL</span></div>
-        <div class="pnl-item"><span class="pnl-label">Win rate:</span><span class="pnl-val" id="pnlWinRate">—%</span></div>
-        <div class="pnl-item"><span class="pnl-label">Trades:</span><span class="pnl-val" id="pnlTrades">—</span></div>
-        <div class="pnl-item"><span class="pnl-label">Open:</span><span class="pnl-val" id="pnlOpen">—</span></div>
+      <!-- Portfolio header — always visible, paper trading first -->
+      <div class="portfolio-header">
+        <div class="port-stat">
+          <div class="port-stat-lbl">Realized P&L</div>
+          <div class="port-stat-val" id="portRealized">— SOL</div>
+          <div class="port-stat-sub" id="portWinRate">—% win rate</div>
+        </div>
+        <div class="port-stat">
+          <div class="port-stat-lbl">SOL at Risk</div>
+          <div class="port-stat-val" id="portAtRisk">— SOL</div>
+          <div class="port-stat-sub" id="portOpenCount">— open positions</div>
+        </div>
+        <div class="port-stat">
+          <div class="port-stat-lbl">Unrealized P&L</div>
+          <div class="port-stat-val" id="portUnrealized">— SOL</div>
+          <div class="port-stat-sub">live estimate</div>
+        </div>
+        <div class="port-stat">
+          <div class="port-stat-lbl">Total Trades</div>
+          <div class="port-stat-val" id="portTrades">—</div>
+          <div class="port-stat-sub" id="portBest">best —%</div>
+        </div>
+        <div class="port-stat">
+          <div class="port-stat-lbl">Avg Hold</div>
+          <div class="port-stat-val" id="portAvgHold">—</div>
+          <div class="port-stat-sub" id="portWorst">worst —%</div>
+        </div>
+        <div class="port-stat">
+          <div class="port-stat-lbl">Alerts/hr</div>
+          <div class="port-stat-val blue" id="alertsHour">—</div>
+          <div class="port-stat-sub" id="scanDuration">last scan —s</div>
+        </div>
       </div>
 
-      <!-- Tabs -->
+      <!-- Tabs — Positions is first -->
       <div class="tab-bar">
-        <div class="tab active" onclick="switchTab('alert',this)">🚀 Alerts</div>
+        <div class="tab active" onclick="switchTab('positions',this)">💼 Positions</div>
+        <div class="tab" onclick="switchTab('alert',this)">🚀 Alerts</div>
         <div class="tab" onclick="switchTab('watch',this)">👀 Watch</div>
         <div class="tab" onclick="switchTab('all',this)">📋 All</div>
-        <div class="tab" onclick="switchTab('positions',this)">💼 Positions</div>
       </div>
 
-      <!-- Table -->
-      <div class="table-wrap" id="tableWrap">
+      <!-- Table (hidden when Positions tab active) -->
+      <div class="table-wrap" id="tableWrap" style="display:none">
         <table>
           <thead>
             <tr>
@@ -372,8 +480,54 @@ tr.selected td { background: rgba(63,185,80,.06); }
         </table>
       </div>
 
-      <!-- Positions panel (hidden unless Positions tab active) -->
-      <div class="position-list" id="positionsPanel" style="display:none"></div>
+      <!-- Positions view (default tab) -->
+      <div class="positions-view" id="positionsView">
+
+        <!-- Quick Buy bar -->
+        <div class="quick-buy-bar">
+          <span class="quick-buy-label">Quick Buy:</span>
+          <input class="input-addr" id="qbAddr"  placeholder="Token address or select from Alerts…" />
+          <input class="input-sol"  id="qbSol"   type="number" step="0.1" min="0.01" value="0.5" placeholder="SOL" />
+          <span class="quick-buy-label">SL%</span>
+          <input class="input-sl"   id="qbSl"    type="number" step="1"   min="0"    value="20"  placeholder="20" />
+          <span class="quick-buy-label">TP%</span>
+          <input class="input-tp"   id="qbTp"    type="number" step="5"   min="0"    value="50"  placeholder="50" />
+          <button class="btn-sm btn-lime" onclick="quickBuy()">⚡ Buy</button>
+          <span id="qbStatus" style="font-size:10px;color:var(--dim);margin-left:4px"></span>
+        </div>
+
+        <!-- Open positions -->
+        <div class="positions-section-title">📂 OPEN POSITIONS (<span id="openCount">0</span>)</div>
+        <div class="open-positions-grid" id="openPositionsGrid">
+          <div style="color:var(--dim);font-size:11px;padding:12px">No open positions — buy from Alerts tab or use Quick Buy above.</div>
+        </div>
+
+        <!-- Trade journal -->
+        <div class="positions-section-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>📒 TRADE JOURNAL (<span id="journalCount">0</span> closed)</span>
+          <span style="font-size:10px;color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">sorted by close time ↓</span>
+        </div>
+        <div class="journal-wrap">
+          <table class="journal-table">
+            <thead>
+              <tr>
+                <th>TOKEN</th>
+                <th>ENTRY</th>
+                <th>EXIT</th>
+                <th>SIZE (SOL)</th>
+                <th>P&amp;L %</th>
+                <th>P&amp;L SOL</th>
+                <th>HOLD</th>
+                <th>REASON</th>
+                <th>CLOSED</th>
+              </tr>
+            </thead>
+            <tbody id="journalTbody">
+              <tr><td colspan="9" style="color:var(--dim);text-align:center;padding:20px">No closed trades yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <!-- Detail drawer -->
       <div class="detail-panel" id="detailPanel">
