@@ -7,13 +7,14 @@ import { AlertService } from "./services/alertService.js";
 import { buildServer } from "./server/api.js";
 
 async function main() {
-  console.log("\n╔═══════════════════════════════════════════╗");
-  console.log("║  MEMESCREENER 3.1 — Solana Early Detector ║");
-  console.log("╚═══════════════════════════════════════════╝\n");
+  console.log("\n╔══════════════════════════════════════════════════╗");
+  console.log("║  MEMESCREENER 4.0 — Solana Multi-Source Detector ║");
+  console.log("╚══════════════════════════════════════════════════╝\n");
 
   // 1. Validate env (exits with clear error if invalid)
   const env = loadEnv();
-  console.log(`[BOOT] Port:${env.PORT} | Scan every ${env.SCAN_INTERVAL_MINUTES}m | Max tokens:${env.DEXSCREENER_MAX_TOKENS}`);
+  const srcLimit = env.MAX_TOKENS_PER_SOURCE ?? env.DEXSCREENER_MAX_TOKENS;
+  console.log(`[BOOT] Port:${env.PORT} | Scan every ${env.SCAN_INTERVAL_MINUTES}m | ${srcLimit} tokens/source | BirdEye:${env.BIRDEYE_API_KEY ? "✓" : "—"} | PumpFun:${env.PUMPFUN_ENABLED}`);
 
   // 2. DB
   const repo = new Repository(env.DATABASE_PATH);

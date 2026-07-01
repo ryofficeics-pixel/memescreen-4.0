@@ -1,6 +1,6 @@
 import type { Repository } from "../db/repository.js";
 import type { TelegramService } from "./telegramService.js";
-import type { ScreenedTokenV31 } from "./screenerService.js";
+import type { ScreenedTokenV40 } from "./screenerService.js";
 
 export class AlertService {
   constructor(
@@ -8,7 +8,7 @@ export class AlertService {
     private readonly tg: TelegramService
   ) {}
 
-  async handleScreenedToken(token: ScreenedTokenV31): Promise<void> {
+  async handleScreenedToken(token: ScreenedTokenV40): Promise<void> {
     if (token.decision !== "alert") return;
 
     // Save alert to DB first to get the ID (needed for Telegram inline buttons)

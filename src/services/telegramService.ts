@@ -296,15 +296,22 @@ export class TelegramService {
       await ctx.reply(`📂 *Open Positions*\n\n${lines}`, { parse_mode: "Markdown" });
     });
 
-    // /pnl — overall paper trading stats
+    // /pnl — rich paper trading stats
     this.bot.command("pnl", async ctx => {
-      const stats = this.repo.positions.getPnlStats();
-      const emoji = stats.totalPnlSol >= 0 ? "🟢" : "🔴";
+      const s = this.repo.positions.getPnlStats();
+      const emoji   = s.realizedPnlSol >= 0 ? "🟢" : "🔴";
+      const sign    = s.realizedPnlSol >= 0 ? "+" : "";
+      const open    = this.repo.positions.listOpenPositions();
+      const ah      = s.avgHoldMinutes;
+      const holdTxt = ah != null ? (ah < 60 ? `${Math.round(ah)}m` : `${(ah/60).toFixed(1)}h`) : "—";
       await ctx.reply(
-        `${emoji} *Paper Trading PnL*\n\n` +
-        `Total PnL: ${stats.totalPnlSol.toFixed(4)} SOL\n` +
-        `Win rate: ${stats.winRate.toFixed(1)}%\n` +
-        `Total closed trades: ${stats.totalTrades}`,
+        `${emoji} *Paper Trading Summary*\n\n` +
+        `💰 Realized PnL: \`${sign}${s.realizedPnlSol.toFixed(4)} SOL\`\n` +
+        `⚖️ Win rate: ${s.winRate.toFixed(1)}% (${s.totalTrades} closed)\n` +
+        `📂 Open positions: ${open.length} (${s.solAtRisk.toFixed(3)} SOL at risk)\n` +
+        `⏱ Avg hold: ${holdTxt}\n` +
+        `📈 Best trade: ${s.bestTradePct != null ? `+${s.bestTradePct.toFixed(1)}%` : "—"}\n` +
+        `📉 Worst trade: ${s.worstTradePct != null ? `${s.worstTradePct.toFixed(1)}%` : "—"}`,
         { parse_mode: "Markdown" }
       );
     });

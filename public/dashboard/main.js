@@ -8,7 +8,7 @@ let openPositions  = [];
 let closedPositions= [];
 let pnlStats        = { totalPnlSol: 0, winRate: 0, totalTrades: 0 };
 let selectedAddr    = null;
-let currentTab      = "alert";
+let currentTab      = "positions";
 let currentSort     = "finalScore";
 let sortAsc         = false;
 let nextScanSecs    = 0;
@@ -180,7 +180,7 @@ function buildRow(t) {
                     : jup ? `<span style="color:var(--lime)">✓</span>`
                           : `<span style="color:var(--red)">✗</span>`;
 
-  return `<tr class="${sel}" onclick="selectToken('${t.address}')" style="cursor:pointer">
+  return `<tr class="${sel}" onclick="selectToken('${t.address}'); fillQuickBuy('${t.address}','${sym}')" style="cursor:pointer">
     <td><span class="tier-badge tier-${tier}">${TIER_ICON[tier] ?? tier}</span></td>
     <td>
       <div class="sym-cell">
@@ -245,7 +245,17 @@ function renderDetail(t) {
     </div>`;
   }).join("");
 
-  const compNames = { volumeVelocity:"Vol Velocity", priceMomentum:"Price Mom", holderGrowth:"Holder Dist", liquidityDepth:"Liq Depth", txActivity:"TX Activity", ageWindow:"Age Window" };
+  const compNames = {
+    volumeVelocity: "Vol Velocity",
+    priceMomentum:  "Price Mom",
+    holderGrowth:   "Holder Dist",
+    liquidityDepth: "Liq Depth",
+    txActivity:     "TX Activity",
+    ageWindow:      "Age Window",
+    buySellPressure:"Buy Pressure",
+    liquidityGrowth:"Liq Growth",
+    crossSourceBonus:"Multi-Source",
+  };
   const compHtml = Object.entries(compNames).map(([k, lbl]) => {
     const v = comps[k] || 0;
     return `<div class="comp-row">
