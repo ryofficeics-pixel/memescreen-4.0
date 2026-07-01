@@ -1,8 +1,241 @@
-# ⚡ MemeScreener 3.1 — Solana Meme Early Detector
+# ⚡ MemeScreener 4.0 — Solana Multi-Source Meme Detector
 
-Best-of-three merge: VectorControl + memscreen-2.0 + Achilles Screener, plus
-tier system, paper trading, and Jupiter routability checks added in v3.1.
-TypeScript, Fastify, Telegraf two-way, anti-scam engine, momentum scoring.
+TypeScript · Fastify · Telegraf · SQLite · BetterSqlite3
+
+Early-entry Solana meme token screener with **3 concurrent data sources**, 9-component
+momentum scoring (6 base + 3 new 4.0 signals), 8-check anti-scam engine, paper trading
+with live P&L dashboard, and full Telegram two-way control.
+
+**Designed to run locally on your laptop first.** No VPS required — paper trading,
+dashboard, and Telegram bot all run from `npm run dev` on `localhost:3001`.
+
+---
+
+## What's new in 4.0
+
+| Feature | Detail |
+|---------|--------|
+| **3 data sources** | DexScreener + BirdEye (volume breakouts) + Pump.fun feed, concurrent |
+| **Multi-source dedup** | All sources run in `Promise.allSettled`, merged by address, highest-liquidity wins |
+| **Cross-source bonus** | +8 pts if 2 sources confirm, +12 pts if all 3 confirm same token |
+| **Buy/sell pressure** | Up to +10 pts: >70% buy-side dominance in 1h txns (>85% flagged as suspicious) |
+| **Liquidity growth** | Up to +6 pts: current liq grew ≥25% vs previous scan cycle |
+| **Paper trading first** | Portfolio header always visible, live P&L cards, trade journal, quick-buy bar |
+| **`/sources` command** | Telegram health report: count, latency, last success per source |
+| **Rich `/pnl`** | Best/worst trade %, avg hold time, SOL at risk, realized + unrealized |
+| **DB migration** | Zero data loss upgrade from 3.1 — `ALTER TABLE` guard adds new columns |
+| **User-Agent 4.0** | All HTTP sources identify as `memescreener/4.0` |
+
+---
+
+## Architecture
+
+```
+src/
+├── config/env.ts               Zod-validated env — exits with clear error on bad config
+├── domain/
+│   ├── types.ts                All interfaces (TokenCandidate, RiskResult, etc.)
+│   ├── risk.ts                 Anti-scam engine (8 checks, hard-block + soft-flag tiers)
+│   ├── opportunity.ts          Momentum scoring (9 signals: 6 base + 3 new 4.0)
+│   └── tier.ts                 S/A/B/C/REJECT classification
+├── sources/
+│   ├── dexScreenerSource.ts    DexScreener API (rate-limited, 30 req/min)
+│   ├── birdeyeSource.ts        BirdEye free tier (sorted by v24hChangePercent) ← 4.0
+│   └── pumpfunSource.ts        Pump.fun feed via DexScreener filter          ← 4.0
+├── db/
+│   ├── repository.ts           SQLite WAL (tokens, alerts, scans, source_status)
+│   └── positionsRepository.ts  Paper trading (positions, closed_positions, stats)
+├── services/
+│   ├── screenerService.ts      Multi-source fetch, dedup, scan loop
+│   ├── telegramService.ts      Telegraf bot (15 commands + inline approve/reject)
+│   ├── alertService.ts         Alert bridge (save → telegram → mark sent)
+│   └── jupiterSource.ts        Optional Jupiter routability check
+├── server/
+│   └── api.ts                  Fastify REST + WS + static dashboard (v4.0.0)
+└── index.ts                    Entrypoint, DI wiring, cron
+```
+
+---
+
+## Scan flow
+
+```
+Every SCAN_INTERVAL_MINUTES (default 30):
+
+1. fetchAllCandidates() — concurrent:
+   ├── DexScreenerSource  → top N Solana pairs by 1h volume
+   ├── BirdEyeSource      → top N by v24hChangePercent (early breakouts)
+   └── PumpFunSource      → pump.fun originated pairs (very new, high risk)
+   Dedup by address (highest liquidity wins), sources[] array populated
+
+2. Per token — computeRisk() — 8 checks:
+   HARD BLOCK (any = skip token entirely):
+   ├── Age < 3 minutes
+   ├── Liquidity < $25K
+   ├── Volume24h < $8K
+   ├── 5m price change > ±80%
+   ├── Top-10 holders > 85%
+   └── Honeypot: transfer fee > 10% via RPC
+
+   SOFT FLAGS (add risk score, don't block):
+   ├── Age < MIN_TOKEN_AGE_MINUTES        +12
+   ├── Liquidity < MIN_LIQUIDITY_USD      +20
+   ├── Volume < MIN_VOLUME_24H_USD        +15
+   ├── Volatility 5m > 40%               +14
+   ├── FDV/liquidity > 150x              +10
+   ├── FDV/liquidity > 300x              +16
+   ├── Top-10 > MAX_TOP10_HOLDER_PCT     +18
+   ├── Honeypot: fee 5–10%               +25
+   └── Mint authority active              +8
+
+3. Per token — computeOpportunity() — 9 signals:
+   BASE (weighted, sum to 100%):
+   ├── Volume Velocity   30%  (1h vol / 24h hourly avg, log scale)
+   ├── Price Momentum    25%  (1h change, sweet spot 5–80%)
+   ├── Holder Spread     20%  (inverse of top10 concentration)
+   ├── Liquidity Depth   15%  (liq/fdv ratio)
+   └── TX Activity       10%  (5m spike vs 1h baseline)
+
+   BONUS (additive, 4.0):
+   ├── Buy/sell pressure  +0–10  (>70% buy-side in 1h txns)
+   ├── Liquidity growth   +0–6   (liq grew ≥25% since last scan)
+   └── Cross-source bonus +0–12  (2 sources=+8, all 3=+12)
+
+   + turnoverBonus +0–12  ($ANSEM pattern: vol/liq ratio)
+   + narrativeBonus +0–6  (symbol cluster detection)
+   + ageWindow bonus 15%  (optimal window: 10min–12h)
+
+4. Final score = (opportunityScore × 0.90 + (100 − riskScore) × 0.10) − (riskScore × 0.40)
+
+5. Decision:
+   ALERT: finalScore ≥ STRONG_BUY_SCORE (75) AND riskScore ≤ MAX_RISK_SCORE (45)
+   WATCH: finalScore ≥ MIN_OPPORTUNITY_SCORE (55) AND riskScore ≤ 55
+   AVOID: hardAvoid OR neither threshold met
+
+6. ALERT → AlertService → DB save → Telegram → markTelegramSent
+   ALL → Repository.upsertToken → SQLite
+   ALL → WS broadcast → Dashboard
+   SL/TP check → PositionsRepository.checkTriggers()
+```
+
+---
+
+## Quick start
+
+```bash
+git clone <this repo>
+cd memescreener-4.0
+cp .env.example .env
+# Fill in: QUICKNODE_RPC_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+# Optional: BIRDEYE_API_KEY for the BirdEye source
+npm install
+npm run dev
+```
+
+Dashboard: `http://localhost:3001`
+
+---
+
+## Environment variables
+
+| Variable | Required | Default | Notes |
+|----------|:--------:|---------|-------|
+| `QUICKNODE_RPC_URL` | ✅ | — | Solana mainnet RPC |
+| `TELEGRAM_BOT_TOKEN` | ✅ | — | From @BotFather |
+| `TELEGRAM_CHAT_ID` | ✅ | — | Your numeric Telegram ID |
+| `BIRDEYE_API_KEY` | — | `""` | BirdEye source skipped if absent |
+| `PUMPFUN_ENABLED` | — | `true` | Toggle pump.fun source |
+| `MULTI_SOURCE_BONUS` | — | `true` | Cross-source confirmation bonus |
+| `MAX_TOKENS_PER_SOURCE` | — | `100` | Per-source fetch limit |
+| `SCAN_INTERVAL_MINUTES` | — | `30` | Scan frequency |
+| `DEXSCREENER_MAX_TOKENS` | — | `100` | Fallback if MAX_TOKENS_PER_SOURCE not set |
+| `MIN_LIQUIDITY_USD` | — | `50000` | Hard + soft filter |
+| `MIN_VOLUME_24H_USD` | — | `25000` | Hard + soft filter |
+| `MIN_TOKEN_AGE_MINUTES` | — | `60` | Soft flag threshold |
+| `MAX_TOP10_HOLDER_PCT` | — | `65` | Soft flag threshold |
+| `MAX_RISK_SCORE` | — | `45` | Max risk to trigger ALERT |
+| `STRONG_BUY_SCORE` | — | `75` | Min final score for ALERT |
+| `MIN_OPPORTUNITY_SCORE` | — | `55` | Min score for WATCH |
+| `MAX_ALERTS_PER_HOUR` | — | `10` | Telegram rate limit |
+| `ENABLE_TELEGRAM` | — | `true` | Toggle Telegram alerts |
+| `PORT` | — | `3001` | Dashboard port |
+| `LOG_LEVEL` | — | `info` | pino log level |
+| `DATABASE_PATH` | — | `./data/screener.db` | SQLite file |
+
+---
+
+## Telegram commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Welcome + command list |
+| `/status` | System health + last scan stats |
+| `/top` | Top 5 ALERT tokens from last scan |
+| `/sources` | Data source health (count, latency, last ok) ← 4.0 |
+| `/check <addr>` | Deep-scan a specific token live |
+| `/scan` | Force immediate scan |
+| `/setjupiter <key>` | Set Jupiter API key at runtime |
+| `/buy <addr> <sol> [sl%] [tp%]` | Open paper position |
+| `/sell <id> [fraction]` | Close paper position (default: full) |
+| `/positions` | List open paper positions |
+| `/pnl` | Rich paper trading summary ← 4.0 |
+| `/pause` | Pause Telegram alerts |
+| `/resume` | Resume Telegram alerts |
+| `/alerts` | Last 10 alerts |
+| `/approve <id>` | Mark alert approved |
+| `/reject <id>` | Mark alert rejected |
+| `/help` | Full command list |
+
+---
+
+## Paper trading
+
+Positions and PnL live in SQLite — no real funds, no wallet.
+
+**Dashboard** (Positions tab is default on load):
+- Portfolio header: realized P&L, SOL at risk, live unrealized P&L, win rate, avg hold
+- Open position cards: entry, size, SL/TP, hold time, live P&L (polls every 30s)
+- Quick Buy bar: paste any address, set SOL + SL%/TP%, one-click open
+- Trade journal: full history with hold time, reason badge, P&L
+
+**Automatic SL/TP:** checked every scan cycle. Auto-closes when thresholds hit.
+
+---
+
+## $ANSEM pattern — baked into scoring
+
+In late June 2026, `$ANSEM` ran 500–800%+ on thin pools ($24K–$185K liq).
+Key signals that MemeScreener now detects:
+
+- **Turnover velocity** (`volume24h / liquidity`): +0–12 bonus if pool turns over 10–100× its depth per day
+- **Narrative cluster**: multiple related tickers in same scan window → +0–6 bonus
+- **Holder concentration check deliberately NOT loosened**: whale dominance reverses pumps as fast as it builds them
+
+---
+
+## VPS deployment
+
+```bash
+npm run build
+npm install -g pm2
+pm2 start dist/src/index.js --name memescreener
+pm2 save && pm2 startup
+```
+
+---
+
+## Roadmap
+
+| Version | Feature | Status |
+|---------|---------|--------|
+| v3.0 | Scan + score + alert + dashboard | ✅ |
+| v3.1 | Tier system, paper trading, Jupiter, turnover scoring | ✅ |
+| v4.0 | Multi-source (BirdEye + Pump.fun), 3 new signals, paper trading first-class | ✅ |
+| v4.1 | Manual watchlist add via dashboard | ⏳ |
+| v4.1 | Telegram inline buy from alert message | ⏳ |
+| v4.2 | Sparkline price charts in dashboard | ⏳ |
+| v4.2 | Kanban queue (SPOTTED → WATCHING → READY → IN → CLOSED) | ⏳ |
+
 
 **Designed to run locally on your laptop first.** No VPS required — paper
 trading, dashboard, and Telegram bot all run from `npm run dev` on

@@ -24,7 +24,7 @@ async function rateLimitedFetch(url: string): Promise<Response> {
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   lastFetchTime = Date.now();
   return fetch(url, {
-    headers: { "User-Agent": "memescreener/3.0" },
+    headers: { "User-Agent": "memescreener/4.0" },
     signal: AbortSignal.timeout(10000)
   });
 }
