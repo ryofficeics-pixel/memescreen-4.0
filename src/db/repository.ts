@@ -120,6 +120,12 @@ export class Repository {
     tierConfidence: number;
     jupiterRoutable: boolean | null;
   }): void {
+    // Pre-fetch previous liquidity so we can pass it as a plain bind param.
+    // SQLite doesn't allow subqueries inside VALUES() with better-sqlite3.
+    const prevLiq = (this.db.prepare(
+      `SELECT liquidity_usd FROM tokens WHERE address = ?`
+    ).get(t.address) as { liquidity_usd: number | null } | undefined)?.liquidity_usd ?? null;
+
     this.db.prepare(`
       INSERT INTO tokens (
         address, symbol, name, dex_id, pair_url,
@@ -129,9 +135,7 @@ export class Repository {
         tier, tier_confidence, jupiter_routable,
         decision, flags, hard_avoid, honeypot_ok, mint_auth_ok,
         top10_holder_pct, evidence, sources, last_scanned
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,
-        (SELECT liquidity_usd FROM tokens WHERE address = ?),
-        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
       ON CONFLICT(address) DO UPDATE SET
         symbol            = excluded.symbol,
         price_usd         = excluded.price_usd,
@@ -162,7 +166,7 @@ export class Repository {
       t.address, t.symbol, t.name, t.dexId, t.pairUrl,
       t.priceUsd, t.volume1hUsd, t.volume24hUsd, t.priceChange1h, t.priceChange5m,
       t.liquidityUsd,
-      t.address,   // subquery param for liquidity_prev on INSERT
+      prevLiq,   // previous liquidity for growth proxy
       t.fdvUsd, t.ageMinutes,
       t.risk.riskScore, t.opportunity.opportunityScore, t.finalScore,
       t.tier, t.tierConfidence,
