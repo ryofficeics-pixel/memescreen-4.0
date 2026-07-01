@@ -34,7 +34,8 @@ export async function computeRisk(
   // ── CHECK 3: Liquidity ────────────────────────────────────────────────
   let liqCheck = { passed: false, value: "" };
   const liqFmt = `$${(candidate.liquidityUsd / 1000).toFixed(1)}K`;
-  if (candidate.liquidityUsd < env.MIN_LIQUIDITY_USD / 2) {
+  if (candidate.liquidityUsd < 5000) {
+    // Hard block only at truly rug-level liquidity ($5K) — not at $25K
     hardAvoidReasons.push("critical_low_liquidity");
     liqCheck = { passed: false, value: liqFmt };
   } else if (candidate.liquidityUsd < env.MIN_LIQUIDITY_USD) {
@@ -48,7 +49,9 @@ export async function computeRisk(
   // ── CHECK 4: Volume 24h ───────────────────────────────────────────────
   let volCheck = { passed: false, value: "" };
   const volFmt = `$${(candidate.volume24hUsd / 1000).toFixed(1)}K`;
-  if (candidate.volume24hUsd < env.MIN_VOLUME_24H_USD / 3) {
+  if (candidate.volume24hUsd < 1000) {
+    // Hard block only at truly dead volume ($1K) — new tokens may have
+    // high 1h volume but low 24h since they just launched
     hardAvoidReasons.push("critical_low_volume");
     volCheck = { passed: false, value: volFmt };
   } else if (candidate.volume24hUsd < env.MIN_VOLUME_24H_USD) {

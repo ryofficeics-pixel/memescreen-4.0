@@ -16,6 +16,20 @@ interface DexPair {
   txns?:           { m5?: { buys?: number; sells?: number }; h1?: { buys?: number; sells?: number } };
 }
 
+// Multiple search terms to maximize candidate coverage across different
+// meme narratives. DexScreener /search returns up to 30 pairs per query.
+// We run them concurrently and deduplicate by pairAddress.
+const SEARCH_TERMS = [
+  "solana meme",
+  "sol pump",
+  "solana cat",
+  "solana dog",
+  "solana pepe",
+  "sol ai",
+  "solana inu",
+  "sol based",
+];
+
 // Simple rate limiter: max 30 req/min = 1 per 2.1s
 let lastFetchTime = 0;
 async function rateLimitedFetch(url: string): Promise<Response> {
@@ -33,15 +47,44 @@ export class DexScreenerSource {
   readonly name = "dexscreener";
 
   async fetchCandidates(limit: number): Promise<TokenCandidate[]> {
-    const resp = await rateLimitedFetch("https://api.dexscreener.com/latest/dex/search?q=SOL");
-    if (!resp.ok) throw new Error(`DexScreener status ${resp.status}`);
+    // Run multiple search terms concurrently to get broad coverage.
+    // DexScreener free tier allows ~30 req/min — we stagger with rate limiter.
+    const results = await Promise.allSettled(
+      SEARCH_TERMS.map(term =>
+        rateLimitedFetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(term)}`)
+          .then(r => r.ok ? r.json() as Promise<{ pairs?: DexPair[] }> : { pairs: [] })
+          .then(body => Array.isArray(body.pairs) ? body.pairs : [])
+          .catch(() => [] as DexPair[])
+      )
+    );
 
-    const body = await resp.json() as { pairs?: DexPair[] };
-    const pairs = Array.isArray(body.pairs) ? body.pairs : [];
+    // Also fetch the latest Solana pairs by volume for recency
+    const latestResult = await rateLimitedFetch(
+      "https://api.dexscreener.com/latest/dex/search?q=sol+token+new"
+    ).then(r => r.ok ? r.json() as Promise<{ pairs?: DexPair[] }> : { pairs: [] })
+     .then(body => Array.isArray(body.pairs) ? body.pairs : [])
+     .catch(() => [] as DexPair[]);
 
-    return pairs
+    // Collect and deduplicate by pairAddress
+    const seen = new Set<string>();
+    const allPairs: DexPair[] = [];
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        for (const pair of result.value) {
+          const key = pair.pairAddress ?? "";
+          if (key && !seen.has(key)) { seen.add(key); allPairs.push(pair); }
+        }
+      }
+    }
+    for (const pair of latestResult) {
+      const key = pair.pairAddress ?? "";
+      if (key && !seen.has(key)) { seen.add(key); allPairs.push(pair); }
+    }
+
+    return allPairs
       .filter(p => p.chainId === "solana")
-      .filter(p => Number(p.liquidity?.usd ?? 0) > 10000)
+      .filter(p => Number(p.liquidity?.usd ?? 0) > 3000)  // lowered from 10K to catch earlier movers
       .sort((a, b) => Number(b.volume?.h1 ?? 0) - Number(a.volume?.h1 ?? 0))
       .slice(0, limit)
       .map(p => this.mapPair(p))
