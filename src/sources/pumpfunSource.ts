@@ -1,4 +1,5 @@
 import type { TokenCandidate } from "../domain/types.js";
+import { dexScreenerFetch } from "./dexScreenerRateLimit.js";
 
 // Pump.fun tokens via DexScreener — searches specifically for pairs
 // originating from pump.fun. These are typically <2h old with sub-$100K
@@ -22,29 +23,16 @@ interface DexPair {
 }
 
 // Shared rate limiter state with dexScreenerSource — both use the same
-// DexScreener free tier (30 req/min). We keep a module-level timestamp
-// so the two sources cooperate even if instantiated separately.
-let lastFetchTime = 0;
-async function rateLimitedFetch(url: string): Promise<Response> {
-  const now  = Date.now();
-  const wait = Math.max(0, 2200 - (now - lastFetchTime));
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastFetchTime = Date.now();
-  return fetch(url, {
-    headers: { "User-Agent": "memescreener/4.0" },
-    signal:  AbortSignal.timeout(10000),
-  });
-}
+// DexScreener free tier (30 req/min). Shared via dexScreenerRateLimit.ts.
 
 export class PumpFunSource {
   readonly name = "pumpfun";
 
   async fetchCandidates(limit: number): Promise<TokenCandidate[]> {
-    // "raydium-clmm pump" surfaces most pump.fun-graduated pairs; we also
-    // try the pump-specific search term. Both are free DexScreener calls.
+    // Both calls go through the shared rate limiter.
     const [r1, r2] = await Promise.allSettled([
-      rateLimitedFetch("https://api.dexscreener.com/latest/dex/search?q=pump+sol"),
-      rateLimitedFetch("https://api.dexscreener.com/latest/dex/search?q=pumpfun"),
+      dexScreenerFetch("https://api.dexscreener.com/latest/dex/search?q=pump+sol"),
+      dexScreenerFetch("https://api.dexscreener.com/latest/dex/search?q=pumpfun"),
     ]);
 
     const pairs: DexPair[] = [];

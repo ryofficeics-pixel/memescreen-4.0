@@ -1,4 +1,5 @@
 import type { TokenCandidate } from "../domain/types.js";
+import { dexScreenerFetch } from "./dexScreenerRateLimit.js";
 
 interface DexPair {
   chainId?:        string;
@@ -18,7 +19,7 @@ interface DexPair {
 
 // Multiple search terms to maximize candidate coverage across different
 // meme narratives. DexScreener /search returns up to 30 pairs per query.
-// We run them concurrently and deduplicate by pairAddress.
+// We run them concurrently through the shared rate limiter.
 const SEARCH_TERMS = [
   "solana meme",
   "sol pump",
@@ -30,36 +31,23 @@ const SEARCH_TERMS = [
   "sol based",
 ];
 
-// Simple rate limiter: max 30 req/min = 1 per 2.1s
-let lastFetchTime = 0;
-async function rateLimitedFetch(url: string): Promise<Response> {
-  const now = Date.now();
-  const wait = Math.max(0, 2100 - (now - lastFetchTime));
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastFetchTime = Date.now();
-  return fetch(url, {
-    headers: { "User-Agent": "memescreener/4.0" },
-    signal: AbortSignal.timeout(10000)
-  });
-}
-
 export class DexScreenerSource {
   readonly name = "dexscreener";
 
   async fetchCandidates(limit: number): Promise<TokenCandidate[]> {
     // Run multiple search terms concurrently to get broad coverage.
-    // DexScreener free tier allows ~30 req/min — we stagger with rate limiter.
+    // All go through the shared dexScreenerFetch rate limiter.
     const results = await Promise.allSettled(
       SEARCH_TERMS.map(term =>
-        rateLimitedFetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(term)}`)
+        dexScreenerFetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(term)}`)
           .then(r => r.ok ? r.json() as Promise<{ pairs?: DexPair[] }> : { pairs: [] })
           .then(body => Array.isArray(body.pairs) ? body.pairs : [])
           .catch(() => [] as DexPair[])
       )
     );
 
-    // Also fetch the latest Solana pairs by volume for recency
-    const latestResult = await rateLimitedFetch(
+    // Also fetch latest token new feed
+    const latestResult = await dexScreenerFetch(
       "https://api.dexscreener.com/latest/dex/search?q=sol+token+new"
     ).then(r => r.ok ? r.json() as Promise<{ pairs?: DexPair[] }> : { pairs: [] })
      .then(body => Array.isArray(body.pairs) ? body.pairs : [])
@@ -92,7 +80,7 @@ export class DexScreenerSource {
   }
 
   async fetchByTokenAddress(tokenAddress: string): Promise<TokenCandidate | null> {
-    const resp = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+    const resp = await dexScreenerFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
     if (!resp.ok) return null;
 
     const body = await resp.json() as { pairs?: DexPair[] };
