@@ -4,6 +4,7 @@ import { isPumpFunEnabled, isMultiSourceBonus, hasBirdEyeKey } from "../config/e
 import type { Repository } from "../db/repository.js";
 import { computeRisk } from "../domain/risk.js";
 import { computeOpportunity } from "../domain/opportunity.js";
+import { assessMoonshotPotential } from "../domain/moonshot.js";
 import { classifyTier, tierRank } from "../domain/tier.js";
 import { checkJupiterRoutable } from "../sources/jupiterSource.js";
 import type {
@@ -82,6 +83,9 @@ export class ScreenerService {
       console.log(`[SCREENER] ${candidates.length} candidates`);
       this.broadcast("SCAN_FETCHED", { runId, count: candidates.length });
 
+      // Collect candidate prices for SL/TP evaluation
+      const candidatePrices = new Map<string, number>();
+
       for (let i = 0; i < candidates.length; i++) {
         const candidate = candidates[i]!;
 
@@ -92,6 +96,8 @@ export class ScreenerService {
         try {
           const screened = await this.screenOne(candidate);
           summary.totalCandidates++;
+
+          candidatePrices.set(candidate.address, candidate.priceUsd);
 
           // Tier-change detection
           const prevTier = this.repo.getPreviousTier(candidate.address);
@@ -119,14 +125,6 @@ export class ScreenerService {
             await this.onAlert(screened);
           }
 
-          // SL/TP check against current prices
-          const priceMap = new Map([[candidate.address, candidate.priceUsd]]);
-          const triggered = this.repo.positions.checkTriggers(priceMap);
-          for (const closed of triggered) {
-            this.broadcast("POSITION_CLOSED", closed);
-            console.log(`[SL/TP] ${closed.symbol} closed: ${closed.reason} @ $${closed.exit_price}`);
-          }
-
         } catch (err) {
           console.error(`[SCREENER] Error on ${candidate.symbol}:`, err instanceof Error ? err.message : err);
         }
@@ -135,6 +133,36 @@ export class ScreenerService {
       }
 
       summary.durationMs = Date.now() - t0;
+
+      // ── Post-scan SL/TP check for ALL open positions ──────────────────────
+      // Uses candidate prices from this scan + fetches any missing addresses.
+      const openPositions = this.repo.positions.listOpenPositions();
+      if (openPositions.length > 0) {
+        let fetchedCount = 0;
+        for (const pos of openPositions) {
+          if (!candidatePrices.has(pos.address)) {
+            try {
+              const candidate = await this.dex.fetchByTokenAddress(pos.address);
+              if (candidate && candidate.priceUsd > 0) {
+                candidatePrices.set(candidate.address, candidate.priceUsd);
+                fetchedCount++;
+              }
+              await sleep(500);
+            } catch (e) {
+              console.warn(`[SL/TP] Could not fetch price for ${pos.symbol}:`, e);
+            }
+          }
+        }
+        if (fetchedCount > 0) {
+          console.log(`[SL/TP] Fetched ${fetchedCount} additional prices for open positions`);
+        }
+        const triggered = this.repo.positions.checkTriggers(candidatePrices);
+        for (const closed of triggered) {
+          this.broadcast("POSITION_CLOSED", closed);
+          console.log(`[SL/TP] ${closed.symbol} closed: ${closed.reason} @ $${closed.exit_price}`);
+        }
+      }
+
       this.repo.saveScan(summary);
       this.lastSummary = summary;
 
@@ -165,6 +193,14 @@ export class ScreenerService {
     // 3. Opportunity — pass previous liquidity for growth proxy (4.0)
     const prevLiquidityUsd = this.repo.getPreviousLiquidity(candidate.address);
     const opportunity = computeOpportunity(candidate, this.env, prevLiquidityUsd);
+
+    // 3b. Moonshot potential — separate from opportunity/risk scoring;
+    // flags candidates that match the extreme-mover (10-100x) profile,
+    // weighted across the documented 48h post-release pump window, and
+    // cross-checks against this scanner's own recorded price history to
+    // catch pumps that happened between scans (see moonshot.ts).
+    const priceHistory = this.repo.getPriceHistory(candidate.address);
+    const moonshot = assessMoonshotPotential(candidate, priceHistory);
 
     // 4. Final score
     const riskPenalty = Math.round(risk.riskScore * 0.4);
@@ -200,10 +236,12 @@ export class ScreenerService {
       ...sourceEvidence,
       ...(risk.flags.length > 0 ? risk.flags.slice(0, 2).map(f => `⚠ ${f}`) : []),
       ...(jupiterResult.checked ? [jupiterRoutable ? "✓ Jupiter routable" : "✗ Jupiter not routable"] : []),
+      ...(moonshot.isMoonshotCandidate ? [`🚀 moonshot candidate (up to ${moonshot.suggestedTpMultiplier}x suggested TP)`] : []),
+      ...(moonshot.pumpAlreadyDetected ? [`⚡ pump already detected: ${moonshot.cumulativeMultipleFromFirstSeen?.toFixed(1)}x since first seen`] : []),
     ];
 
     return {
-      ...candidate, risk, opportunity, decision, finalScore, evidence,
+      ...candidate, risk, opportunity, decision, finalScore, evidence, moonshot,
       tier:           tierResult.tier,
       tierConfidence: tierResult.confidence,
       jupiterRoutable,
@@ -231,6 +269,16 @@ export class ScreenerService {
       evidence: t.evidence, checks: t.risk.checks,
       components: t.opportunity.components,
       flags: t.risk.flags, hardAvoid: t.risk.hardAvoid,
+      moonshot: {
+        score: t.moonshot.moonshotScore,
+        isMoonshotCandidate: t.moonshot.isMoonshotCandidate,
+        suggestedTpMultiplier: t.moonshot.suggestedTpMultiplier,
+        suggestedTpPct: t.moonshot.suggestedTpPct,
+        suggestedSlPct: t.moonshot.suggestedSlPct,
+        withinPumpWindow: t.moonshot.withinPumpWindow,
+        cumulativeMultipleFromFirstSeen: t.moonshot.cumulativeMultipleFromFirstSeen,
+        pumpAlreadyDetected: t.moonshot.pumpAlreadyDetected,
+      },
     };
   }
 
@@ -255,7 +303,7 @@ export class ScreenerService {
 
     if (isPumpFunEnabled(this.env)) {
       const pump = new PumpFunSource();
-      sources.push({ name: "pumpfun", fetch: () => pump.fetchCandidates(Math.min(limit, 50)) });
+      sources.push({ name: "pumpfun", fetch: () => pump.fetchCandidates(limit) });
     }
 
     // Fire all sources concurrently — one slow/dead source doesn't block others

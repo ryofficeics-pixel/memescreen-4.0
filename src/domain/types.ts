@@ -1,3 +1,5 @@
+import type { MoonshotResult } from "./moonshot.js";
+
 // ─── Token from data sources ───────────────────────────────────────────────
 export interface TokenCandidate {
   address:        string;
@@ -77,6 +79,7 @@ export interface ScreenedToken extends TokenCandidate {
   decision:    TokenDecision;
   finalScore:  number;
   evidence:    string[];
+  moonshot:    MoonshotResult;
 }
 
 // ─── Scan summary ──────────────────────────────────────────────────────────
@@ -144,6 +147,12 @@ export interface TokenRow {
   mint_auth_ok:     number;
   top10_holder_pct: number | null;
   evidence:         string;
+  moonshot_score:   number;
+  moonshot_flag:    number;
+  first_seen_price_usd: number | null;
+  first_seen_at:         string | null;
+  peak_price_usd:         number | null;
+  peak_liquidity_usd:     number | null;
   last_scanned:     string;
 }
 
@@ -169,15 +178,22 @@ export interface TierResult {
 
 // ─── Paper trading (from VectorControl) ───────────────────────────────────
 export interface Position {
-  id:          string;
-  address:     string;
-  symbol:      string;
-  entryPrice:  number;
-  amountSol:   number;
-  slPct:       number | null;
-  tpPct:       number | null;
-  openedAt:    string;
-  status:      "open";
+  id:              string;
+  address:         string;
+  symbol:          string;
+  entryPrice:      number;
+  amountSol:       number;
+  slPct:           number | null;
+  tpPct:           number | null;
+  /** Optional adaptive take-profit: instead of selling at a fixed tpPct,
+   *  track the peak price and only close once price retraces this % off
+   *  the peak. Lets a position ride a moonshot far past any pre-set target
+   *  while still locking in gains once it actually reverses. tpPct (if
+   *  also set) still acts as a hard ceiling — ensures profit is taken if
+   *  the token hits that multiple outright, trailing or not. */
+  trailingStopPct: number | null;
+  openedAt:        string;
+  status:          "open";
 }
 
 export interface ClosedPosition {
@@ -190,7 +206,7 @@ export interface ClosedPosition {
   amountSol:   number;
   pnlPct:      number | null;
   pnlSol:      number | null;
-  reason:      "manual" | "stop-loss" | "take-profit" | "partial";
+  reason:      "manual" | "stop-loss" | "take-profit" | "trailing-stop" | "partial";
   openedAt:    string;
   closedAt:    string;
 }
@@ -204,16 +220,18 @@ export interface JupiterCheckResult {
 
 // ─── DB rows for positions ─────────────────────────────────────────────────
 export interface PositionRow {
-  id:          string;
-  address:     string;
-  symbol:      string;
-  entry_price: number;
-  amount_sol:  number;
-  sl_pct:      number | null;
-  tp_pct:      number | null;
-  notes:       string | null;
-  opened_at:   string;
-  status:      string;
+  id:                 string;
+  address:            string;
+  symbol:             string;
+  entry_price:        number;
+  amount_sol:         number;
+  sl_pct:             number | null;
+  tp_pct:             number | null;
+  trailing_stop_pct:  number | null;
+  peak_price:         number;
+  notes:              string | null;
+  opened_at:          string;
+  status:             string;
 }
 
 export interface ClosedPositionRow {

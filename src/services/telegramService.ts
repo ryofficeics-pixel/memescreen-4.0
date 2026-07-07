@@ -42,7 +42,7 @@ export class TelegramService {
       "/sources — data source health\n" +
       "/check <address> — analyze token\n" +
       "/scan — trigger manual scan\n" +
-      "/buy <addr> <sol> [sl%] [tp%] — paper buy\n" +
+      "/buy <addr> <sol> [sl%] [tp%] [trail%] — paper buy\n" +
       "/sell <id> [fraction] — paper sell\n" +
       "/positions — open paper positions\n" +
       "/pnl — paper trading stats\n" +
@@ -61,7 +61,9 @@ export class TelegramService {
       "`/check <addr>` — deep scan specific token\n" +
       "`/scan` — force immediate scan\n" +
       "`/setjupiter <key>` — set Jupiter API key (routability checks)\n" +
-      "`/buy <addr> <sol> [sl%] [tp%]` — open paper position\n" +
+      "`/buy <addr> <sol> [sl%] [tp%] [trail%]` — open paper position " +
+      "(blank sl/tp auto-fills from moonshot suggestion; trail% rides the " +
+      "move with an adaptive trailing stop instead of a fixed target)\n" +
       "`/sell <id> [fraction]` — close paper position (default: full)\n" +
       "`/positions` — list open paper positions\n" +
       "`/pnl` — paper trading PnL summary\n" +
@@ -221,22 +223,39 @@ export class TelegramService {
     // ── Paper trading commands ────────────────────────────────────────────
     // /buy <address> <amountSol> [slPct] [tpPct]
     this.bot.command("buy", async ctx => {
-      const parts = ctx.message.text.split(" ").filter(Boolean);
+      const parts   = ctx.message.text.split(" ").filter(Boolean);
       const address = parts[1];
       const amount  = parseFloat(parts[2] ?? "");
-      const slPct   = parts[3] ? parseFloat(parts[3]) : null;
-      const tpPct   = parts[4] ? parseFloat(parts[4]) : null;
+      let   slPct   = parts[3] ? parseFloat(parts[3]) : null;
+      let   tpPct   = parts[4] ? parseFloat(parts[4]) : null;
+      const trailPct = parts[5] ? parseFloat(parts[5]) : null;
 
       if (!address || isNaN(amount) || amount <= 0) {
         return ctx.reply(
-          "Usage: /buy <address> <amountSol> [slPct] [tpPct]\n" +
+          "Usage: /buy <address> <amountSol> [slPct] [tpPct] [trailPct]\n" +
           "Example: /buy 8a5bn...pump 0.5 20 50\n" +
-          "(buys 0.5 SOL worth, stop-loss -20%, take-profit +50%)"
+          "(buys 0.5 SOL worth, stop-loss -20%, take-profit +50%)\n\n" +
+          "Leave slPct/tpPct blank (or pass \"-\") to auto-fill from the " +
+          "adaptive moonshot suggestion — e.g. /buy <addr> 0.5 - - 25 uses " +
+          "the suggested SL/TP with a 25% trailing stop instead of a fixed target."
         );
       }
 
       const screened = await this.screener.checkAddress(address);
       if (!screened) return ctx.reply("❌ Token not found on DexScreener");
+
+      // Auto-fill from the adaptive moonshot suggestion if the user left
+      // SL/TP unset (or passed "-") rather than defaulting to nothing —
+      // a moonshot-flagged token left with no TP has no safety net either.
+      let autoFilled = false;
+      if (slPct === null || isNaN(slPct)) {
+        slPct = screened.moonshot.suggestedSlPct;
+        autoFilled = true;
+      }
+      if (tpPct === null || isNaN(tpPct)) {
+        tpPct = screened.moonshot.suggestedTpPct;
+        autoFilled = true;
+      }
 
       const pos = this.repo.positions.openPosition({
         address: screened.address,
@@ -244,14 +263,22 @@ export class TelegramService {
         entryPrice: screened.priceUsd,
         amountSol:  amount,
         slPct, tpPct,
+        trailingStopPct: trailPct && !isNaN(trailPct) ? trailPct : null,
       });
+
+      const moonshotNote = screened.moonshot.isMoonshotCandidate
+        ? `\n🚀 Moonshot candidate (score ${screened.moonshot.moonshotScore}/100) — suggested ceiling ${screened.moonshot.suggestedTpMultiplier}x`
+        : "";
 
       await ctx.reply(
         `✅ *Paper position opened*\n\n` +
         `Token: $${pos.symbol}\n` +
         `Entry: $${fmtPrice(pos.entry_price)}\n` +
         `Size: ${pos.amount_sol} SOL\n` +
-        `SL: ${slPct ? `-${slPct}%` : "none"} | TP: ${tpPct ? `+${tpPct}%` : "none"}\n` +
+        `SL: ${slPct ? `-${slPct}%` : "none"} | TP: ${tpPct ? `+${tpPct}%` : "none"}` +
+        `${autoFilled ? " (auto-filled from moonshot suggestion)" : ""}\n` +
+        `Trailing stop: ${pos.trailing_stop_pct ? `${pos.trailing_stop_pct}% off peak` : "none — fixed TP only"}` +
+        moonshotNote + `\n` +
         `ID: \`${pos.id}\``,
         { parse_mode: "Markdown" }
       );
@@ -290,7 +317,8 @@ export class TelegramService {
       if (open.length === 0) return ctx.reply("No open positions.");
       const lines = open.map(p =>
         `*$${p.symbol}* — ${p.amount_sol} SOL @ $${fmtPrice(p.entry_price)}\n` +
-        `  SL:${p.sl_pct ? `-${p.sl_pct}%` : "—"} TP:${p.tp_pct ? `+${p.tp_pct}%` : "—"}\n` +
+        `  SL:${p.sl_pct ? `-${p.sl_pct}%` : "—"} TP:${p.tp_pct ? `+${p.tp_pct}%` : "—"}` +
+        `${p.trailing_stop_pct ? ` Trail:${p.trailing_stop_pct}% (peak $${fmtPrice(p.peak_price)})` : ""}\n` +
         `  \`${p.id}\``
       ).join("\n\n");
       await ctx.reply(`📂 *Open Positions*\n\n${lines}`, { parse_mode: "Markdown" });
@@ -431,9 +459,19 @@ export class TelegramService {
       ...(comp.crossSourceBonus > 0 ? [`• Multi-Source:   +${comp.crossSourceBonus}pts`] : []),
     ].join("\n");
 
+    const moonshotLine = t.moonshot.isMoonshotCandidate
+      ? `🚀 *Moonshot candidate* (${t.moonshot.moonshotScore}/100) — suggested TP ceiling *${t.moonshot.suggestedTpMultiplier}x*, SL -${t.moonshot.suggestedSlPct}%\n` +
+        (t.moonshot.pumpAlreadyDetected
+          ? `⚡ Pump already detected: *${t.moonshot.cumulativeMultipleFromFirstSeen?.toFixed(1)}x* since first seen\n\n`
+          : "\n")
+      : (t.moonshot.pumpAlreadyDetected
+          ? `⚡ *Pump already detected*: ${t.moonshot.cumulativeMultipleFromFirstSeen?.toFixed(1)}x since first seen\n\n`
+          : "");
+
     return (
       `${emoji} *${t.decision === "alert" ? "STRONG BUY" : "WATCH"}: $${t.symbol}*  ${tierIcon} Tier ${t.tier}\n` +
       `${t.name}\n\n` +
+      moonshotLine +
       `📊 *Score: ${t.finalScore}/100*  (confidence ${t.tierConfidence}%)\n` +
       `\`${scoreBar}\`\n` +
       `Risk: ${t.risk.riskScore}/100 | Opp: ${t.opportunity.opportunityScore}/100\n` +

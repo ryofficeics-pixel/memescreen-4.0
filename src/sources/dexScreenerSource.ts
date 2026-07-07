@@ -20,6 +20,8 @@ interface DexPair {
 // Multiple search terms to maximize candidate coverage across different
 // meme narratives. DexScreener /search returns up to 30 pairs per query.
 // We run them concurrently through the shared rate limiter.
+// Each term pulls a mostly-distinct slice of the Solana meme market —
+// overlap is deduplicated by pairAddress so adding terms only adds coverage.
 const SEARCH_TERMS = [
   "solana meme",
   "sol pump",
@@ -29,6 +31,14 @@ const SEARCH_TERMS = [
   "sol ai",
   "solana inu",
   "sol based",
+  "solana frog",
+  "sol degen",
+  "solana baby",
+  "sol elon",
+  "solana trump",
+  "sol moon",
+  "solana chad",
+  "sol wojak",
 ];
 
 export class DexScreenerSource {
@@ -74,7 +84,8 @@ export class DexScreenerSource {
       .filter(p => p.chainId === "solana")
       .filter(p => Number(p.liquidity?.usd ?? 0) > 3000)  // lowered from 10K to catch earlier movers
       .sort((a, b) => Number(b.volume?.h1 ?? 0) - Number(a.volume?.h1 ?? 0))
-      .slice(0, limit)
+      // No slice — pass all deduped pairs through. The screener processes
+      // everything it receives; capping here just loses coverage.
       .map(p => this.mapPair(p))
       .filter(t => t.address.length > 0);
   }

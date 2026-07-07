@@ -1,5 +1,6 @@
 import type BetterSqlite3 from "better-sqlite3";
 import type { Position, ClosedPosition, PositionRow, ClosedPositionRow } from "../domain/types.js";
+import { evaluateTrigger } from "../domain/triggers.js";
 import { randomUUID } from "node:crypto";
 
 export class PositionsRepository {
@@ -15,6 +16,8 @@ export class PositionsRepository {
         amount_sol  REAL NOT NULL,
         sl_pct      REAL,
         tp_pct      REAL,
+        trailing_stop_pct REAL,
+        peak_price  REAL,
         notes       TEXT,
         opened_at   TEXT DEFAULT (datetime('now')),
         status      TEXT DEFAULT 'open'
@@ -46,6 +49,15 @@ export class PositionsRepository {
     if (!posCols.includes("notes")) {
       this.db.exec(`ALTER TABLE positions ADD COLUMN notes TEXT`);
     }
+    // Adaptive take-profit migration: trailing stop + peak price tracking
+    if (!posCols.includes("trailing_stop_pct")) {
+      this.db.exec(`ALTER TABLE positions ADD COLUMN trailing_stop_pct REAL`);
+    }
+    if (!posCols.includes("peak_price")) {
+      this.db.exec(`ALTER TABLE positions ADD COLUMN peak_price REAL`);
+      // Backfill existing open positions so peak tracking starts from entry
+      this.db.exec(`UPDATE positions SET peak_price = entry_price WHERE peak_price IS NULL`);
+    }
     const closedCols = (this.db.prepare("PRAGMA table_info(closed_positions)").all() as { name: string }[]).map(r => r.name);
     if (!closedCols.includes("notes")) {
       this.db.exec(`ALTER TABLE closed_positions ADD COLUMN notes TEXT`);
@@ -56,9 +68,14 @@ export class PositionsRepository {
   openPosition(p: Omit<Position, "id" | "openedAt" | "status"> & { notes?: string }): PositionRow {
     const id = randomUUID();
     this.db.prepare(`
-      INSERT INTO positions (id, address, symbol, entry_price, amount_sol, sl_pct, tp_pct, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, p.address, p.symbol, p.entryPrice, p.amountSol, p.slPct ?? null, p.tpPct ?? null, p.notes ?? null);
+      INSERT INTO positions (id, address, symbol, entry_price, amount_sol, sl_pct, tp_pct, trailing_stop_pct, peak_price, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, p.address, p.symbol, p.entryPrice, p.amountSol,
+      p.slPct ?? null, p.tpPct ?? null, p.trailingStopPct ?? null,
+      p.entryPrice, // peak starts at entry
+      p.notes ?? null
+    );
     return this.getPosition(id)!;
   }
 
@@ -115,7 +132,16 @@ export class PositionsRepository {
     ).get(closedId) as ClosedPositionRow;
   }
 
-  // ── SL/TP trigger check ───────────────────────────────────────────────────
+  // ── SL/TP/trailing trigger check ────────────────────────────────────────
+  // Adaptive take-profit: a fixed tp_pct sells a token the moment it hits
+  // one target, which is exactly wrong for a meme coin that can keep running
+  // 10-100x past that point. If trailing_stop_pct is set, this instead
+  // tracks the peak price the position has reached and only closes once
+  // price retraces trailing_stop_pct off that peak — riding the move
+  // instead of capping it, while still locking in gains once it actually
+  // reverses. tp_pct (if also set) remains a hard ceiling. The actual
+  // decision logic lives in domain/triggers.ts (pure, unit-tested); this
+  // method only handles reading/persisting state and closing positions.
   checkTriggers(currentPrices: Map<string, number>): ClosedPositionRow[] {
     const positions = this.listOpenPositions();
     const closed: ClosedPositionRow[] = [];
@@ -124,15 +150,23 @@ export class PositionsRepository {
       const price = currentPrices.get(pos.address);
       if (price === undefined) continue;
 
-      const pnlPct = pos.entry_price > 0
-        ? ((price - pos.entry_price) / pos.entry_price) * 100
-        : 0;
+      const { reason, newPeak } = evaluateTrigger(
+        {
+          entryPrice:      pos.entry_price,
+          slPct:           pos.sl_pct,
+          tpPct:           pos.tp_pct,
+          trailingStopPct: pos.trailing_stop_pct,
+          peakPrice:       pos.peak_price ?? pos.entry_price,
+        },
+        price
+      );
 
-      if (pos.sl_pct !== null && pnlPct <= -Math.abs(pos.sl_pct)) {
-        const result = this.closePosition(pos.id, 1, price, "stop-loss");
-        if (result) closed.push(result);
-      } else if (pos.tp_pct !== null && pnlPct >= Math.abs(pos.tp_pct)) {
-        const result = this.closePosition(pos.id, 1, price, "take-profit");
+      if (newPeak !== pos.peak_price) {
+        this.db.prepare(`UPDATE positions SET peak_price = ? WHERE id = ?`).run(newPeak, pos.id);
+      }
+
+      if (reason) {
+        const result = this.closePosition(pos.id, 1, price, reason);
         if (result) closed.push(result);
       }
     }

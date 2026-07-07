@@ -48,6 +48,12 @@ export class Repository {
         mint_auth_ok      INTEGER DEFAULT 0,
         top10_holder_pct  REAL,
         evidence          TEXT,
+        moonshot_score    INTEGER DEFAULT 0,
+        moonshot_flag     INTEGER DEFAULT 0,
+        first_seen_price_usd REAL,
+        first_seen_at         TEXT,
+        peak_price_usd        REAL,
+        peak_liquidity_usd    REAL,
         last_scanned      TEXT DEFAULT (datetime('now'))
       );
 
@@ -109,6 +115,37 @@ export class Repository {
     if (!tokenCols.includes("liquidity_prev")) {
       this.db.exec(`ALTER TABLE tokens ADD COLUMN liquidity_prev REAL`);
     }
+    if (!tokenCols.includes("moonshot_score")) {
+      this.db.exec(`ALTER TABLE tokens ADD COLUMN moonshot_score INTEGER DEFAULT 0`);
+    }
+    if (!tokenCols.includes("moonshot_flag")) {
+      this.db.exec(`ALTER TABLE tokens ADD COLUMN moonshot_flag INTEGER DEFAULT 0`);
+    }
+    // Pump-window history: tracks each token's first-seen price and the
+    // running peak price/liquidity across every scan, independent of
+    // DexScreener's fixed 5m/1h/24h rolling windows and independent of the
+    // scanner's own poll interval. A 1-2h scan cadence can miss a pump that
+    // happens between two scans; DexScreener's h24 field can also miss one
+    // that happened 24-48h ago by the time you next look. Comparing current
+    // price to the price the very first time this scanner saw the token
+    // catches it regardless of when the pump actually happened within the
+    // documented 48h post-release window.
+    if (!tokenCols.includes("first_seen_price_usd")) {
+      this.db.exec(`ALTER TABLE tokens ADD COLUMN first_seen_price_usd REAL`);
+      this.db.exec(`UPDATE tokens SET first_seen_price_usd = price_usd WHERE first_seen_price_usd IS NULL`);
+    }
+    if (!tokenCols.includes("first_seen_at")) {
+      this.db.exec(`ALTER TABLE tokens ADD COLUMN first_seen_at TEXT`);
+      this.db.exec(`UPDATE tokens SET first_seen_at = last_scanned WHERE first_seen_at IS NULL`);
+    }
+    if (!tokenCols.includes("peak_price_usd")) {
+      this.db.exec(`ALTER TABLE tokens ADD COLUMN peak_price_usd REAL`);
+      this.db.exec(`UPDATE tokens SET peak_price_usd = price_usd WHERE peak_price_usd IS NULL`);
+    }
+    if (!tokenCols.includes("peak_liquidity_usd")) {
+      this.db.exec(`ALTER TABLE tokens ADD COLUMN peak_liquidity_usd REAL`);
+      this.db.exec(`UPDATE tokens SET peak_liquidity_usd = liquidity_usd WHERE peak_liquidity_usd IS NULL`);
+    }
 
     this.positions.init();
     console.log("[DB] Schema ready (v4.0)");
@@ -134,8 +171,10 @@ export class Repository {
         risk_score, opportunity_score, final_score,
         tier, tier_confidence, jupiter_routable,
         decision, flags, hard_avoid, honeypot_ok, mint_auth_ok,
-        top10_holder_pct, evidence, sources, last_scanned
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+        top10_holder_pct, evidence, sources, moonshot_score, moonshot_flag,
+        first_seen_price_usd, first_seen_at, peak_price_usd, peak_liquidity_usd,
+        last_scanned
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),?,?,datetime('now'))
       ON CONFLICT(address) DO UPDATE SET
         symbol            = excluded.symbol,
         price_usd         = excluded.price_usd,
@@ -161,6 +200,12 @@ export class Repository {
         top10_holder_pct  = excluded.top10_holder_pct,
         evidence          = excluded.evidence,
         sources           = excluded.sources,
+        moonshot_score    = excluded.moonshot_score,
+        moonshot_flag     = excluded.moonshot_flag,
+        first_seen_price_usd = COALESCE(tokens.first_seen_price_usd, excluded.first_seen_price_usd),
+        first_seen_at         = COALESCE(tokens.first_seen_at, excluded.first_seen_at),
+        peak_price_usd         = MAX(COALESCE(tokens.peak_price_usd, 0), excluded.price_usd),
+        peak_liquidity_usd     = MAX(COALESCE(tokens.peak_liquidity_usd, 0), excluded.liquidity_usd),
         last_scanned      = datetime('now')
     `).run(
       t.address, t.symbol, t.name, t.dexId, t.pairUrl,
@@ -177,7 +222,12 @@ export class Repository {
       t.risk.checks.mintAuth.passed ? 1 : 0,
       t.top10HolderPct,
       JSON.stringify(t.evidence),
-      Array.isArray(t.sources) ? t.sources.join(",") : (t.source ?? "")
+      Array.isArray(t.sources) ? t.sources.join(",") : (t.source ?? ""),
+      t.moonshot.moonshotScore,
+      t.moonshot.isMoonshotCandidate ? 1 : 0,
+      t.priceUsd, // first_seen_price_usd (only used if this is a new row)
+      t.priceUsd, // peak_price_usd (only used if this is a new row)
+      t.liquidityUsd // peak_liquidity_usd (only used if this is a new row)
     );
   }
 
@@ -187,6 +237,33 @@ export class Repository {
       `SELECT liquidity_prev FROM tokens WHERE address = ?`
     ).get(address) as { liquidity_prev: number | null } | undefined;
     return row?.liquidity_prev ?? null;
+  }
+
+  // Pump-window history for the moonshot detector — see migration comment
+  // above for why this exists (DexScreener's rolling windows + a 1-2h scan
+  // cadence can both individually miss a pump within the 48h window; this
+  // catches it regardless, by comparing against this scanner's own record).
+  getPriceHistory(address: string): {
+    firstSeenPriceUsd: number | null;
+    firstSeenAt:       string | null;
+    peakPriceUsd:       number | null;
+    peakLiquidityUsd:   number | null;
+  } {
+    const row = this.db.prepare(
+      `SELECT first_seen_price_usd, first_seen_at, peak_price_usd, peak_liquidity_usd FROM tokens WHERE address = ?`
+    ).get(address) as {
+      first_seen_price_usd: number | null;
+      first_seen_at:        string | null;
+      peak_price_usd:        number | null;
+      peak_liquidity_usd:    number | null;
+    } | undefined;
+
+    return {
+      firstSeenPriceUsd: row?.first_seen_price_usd ?? null,
+      firstSeenAt:       row?.first_seen_at ?? null,
+      peakPriceUsd:       row?.peak_price_usd ?? null,
+      peakLiquidityUsd:   row?.peak_liquidity_usd ?? null,
+    };
   }
 
   // ── 4.0: Source statuses for /sources command ────────────────────────────

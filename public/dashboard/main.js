@@ -16,6 +16,22 @@ let countdownTimer;
 
 const TIER_ICON = { S: "S", A: "A", B: "B", C: "C", REJECT: "✗" };
 
+// ─── XSS guard ──────────────────────────────────────────────────────────────
+// Token symbol/name/dexId come straight from on-chain metadata via
+// DexScreener — fully attacker-controlled (anyone can mint a token with any
+// name). Every such value MUST go through esc() before landing in innerHTML.
+// Never interpolate untrusted strings into inline event handler attributes
+// (onclick="...('${x}')") even after escaping — HTML-entity decoding of an
+// attribute value happens before the browser treats it as JS source, so
+// escaping a quote does not prevent a breakout there. Pass only
+// system-generated identifiers (address, position id) through inline
+// handlers, and look up anything else from state by that identifier.
+function esc(str) {
+  return String(str ?? "").replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]));
+}
+
 // ─── Source badge helpers (4.0) ───────────────────────────────────────────────
 const SOURCE_ICON = { dexscreener: "📈", birdeye: "🦅", pumpfun: "🎰" };
 
@@ -172,6 +188,7 @@ function buildRow(t) {
   const tier   = t.tier || "C";
   const jup    = t.jupiterRoutable !== undefined ? t.jupiterRoutable
                : (t.jupiter_routable === null || t.jupiter_routable === undefined ? null : !!t.jupiter_routable);
+  const isMoonshot = t.moonshot?.isMoonshotCandidate ?? !!t.moonshot_flag;
 
   const scoreColor = score >= 75 ? "var(--lime)" : score >= 55 ? "var(--yellow)" : "var(--blue)";
   const riskColor  = risk  >= 60 ? "var(--red)"  : risk  >= 35 ? "var(--yellow)" : "var(--lime)";
@@ -179,15 +196,21 @@ function buildRow(t) {
   const jupHtml    = jup === null ? `<span style="color:var(--dim)">—</span>`
                     : jup ? `<span style="color:var(--lime)">✓</span>`
                           : `<span style="color:var(--red)">✗</span>`;
+  const moonshotBadge = isMoonshot
+    ? `<span title="Moonshot candidate — up to ${t.moonshot?.suggestedTpMultiplier ?? "?"}x suggested TP" style="margin-left:4px">🚀</span>`
+    : "";
+  const pumpBadge = t.moonshot?.pumpAlreadyDetected
+    ? `<span title="Pump already detected: ${t.moonshot.cumulativeMultipleFromFirstSeen?.toFixed(1)}x since first seen" style="margin-left:2px">⚡</span>`
+    : "";
 
-  return `<tr class="${sel}" onclick="selectToken('${t.address}'); fillQuickBuy('${t.address}','${sym}')" style="cursor:pointer">
+  return `<tr class="${sel}" onclick="selectToken('${t.address}'); fillQuickBuy('${t.address}')" style="cursor:pointer">
     <td><span class="tier-badge tier-${tier}">${TIER_ICON[tier] ?? tier}</span></td>
     <td>
       <div class="sym-cell">
-        <div class="sym-avatar">${sym.slice(0,3)}</div>
+        <div class="sym-avatar">${esc(sym.slice(0,3))}</div>
         <div>
-          <div class="sym-name">$${sym} ${renderSourceBadges(t.sources || (t.source ? [t.source] : []))}</div>
-          <div class="sym-dex">${t.dexId || t.dex_id || "—"}</div>
+          <div class="sym-name">$${esc(sym)} ${renderSourceBadges(t.sources || (t.source ? [t.source] : []))}${moonshotBadge}${pumpBadge}</div>
+          <div class="sym-dex">${esc(t.dexId || t.dex_id || "—")}</div>
         </div>
       </div>
     </td>
@@ -234,6 +257,7 @@ function renderDetail(t) {
   const age    = t.ageMinutes ?? t.age_minutes;
   const tier   = t.tier || "C";
   const ev     = t.evidence ? (Array.isArray(t.evidence) ? t.evidence : JSON.parse(t.evidence)) : [];
+  const moonshot = t.moonshot || null;
 
   const checkNames = { age:"Age", liquidity:"Liquidity", volume:"Volume", volatility:"Volatility", fdvRatio:"FDV/Liq", holderConc:"Top 10", honeypot:"Sell Sim", mintAuth:"Mint Auth" };
   const checkHtml = Object.entries(checkNames).map(([k, lbl]) => {
@@ -265,29 +289,45 @@ function renderDetail(t) {
     </div>`;
   }).join("");
 
+  const moonshotBlock = moonshot?.isMoonshotCandidate
+    ? `<div style="font-size:11px;color:var(--lime);line-height:1.6;margin:4px 0">
+        🚀 Moonshot candidate (${moonshot.score}/100) — suggested ceiling <b>${moonshot.suggestedTpMultiplier}x</b>,
+        SL -${moonshot.suggestedSlPct}%
+        ${moonshot.pumpAlreadyDetected ? `<br>⚡ Pump already detected: <b>${moonshot.cumulativeMultipleFromFirstSeen?.toFixed(1)}x</b> since first seen` : ""}
+      </div>`
+    : (moonshot?.pumpAlreadyDetected
+        ? `<div style="font-size:11px;color:var(--yellow);line-height:1.6;margin:4px 0">
+             ⚡ Pump already detected: <b>${moonshot.cumulativeMultipleFromFirstSeen?.toFixed(1)}x</b> since first seen
+           </div>`
+        : "");
+
   document.getElementById("detailInner").innerHTML = `
     <div class="detail-col">
       <div>
         <div class="detail-title">
           <span class="tier-badge tier-${tier}" style="margin-right:6px">${TIER_ICON[tier] ?? tier}</span>
-          $${sym} — Score ${score}/100 · Age ${age != null ? fmtAge(age) : "?"}
+          $${esc(sym)} — Score ${score}/100 · Age ${age != null ? fmtAge(age) : "?"}
         </div>
-        ${ev.length ? `<div style="font-size:10px;color:var(--dim);line-height:1.7">${ev.join(" · ")}</div>` : ""}
+        ${moonshotBlock}
+        ${ev.length ? `<div style="font-size:10px;color:var(--dim);line-height:1.7">${ev.map(esc).join(" · ")}</div>` : ""}
         <div class="address-box">
-          <div class="address-text" title="${addr}">${addr}</div>
+          <div class="address-text" title="${esc(addr)}">${esc(addr)}</div>
           <button class="copy-btn" onclick="copyAddr('${addr}')">Copy</button>
         </div>
-        <a class="detail-link" href="${url}" target="_blank">📊 View on DexScreener ↗</a>
+        <a class="detail-link" href="${esc(url)}" target="_blank">📊 View on DexScreener ↗</a>
       </div>
 
       <div class="trade-form">
         <div class="detail-title" style="margin-top:4px">Paper Trade</div>
         <div class="trade-row">
           <input class="trade-input" id="tradeAmount" type="number" step="0.01" placeholder="SOL amount" value="0.1"/>
-          <input class="trade-input" id="tradeSl" type="number" step="1" placeholder="SL % (opt)"/>
-          <input class="trade-input" id="tradeTp" type="number" step="1" placeholder="TP % (opt)"/>
+          <input class="trade-input" id="tradeSl" type="number" step="1" placeholder="SL % (opt)" value="${moonshot?.suggestedSlPct ?? ""}"/>
+          <input class="trade-input" id="tradeTp" type="number" step="1" placeholder="TP % (opt)" value="${moonshot?.suggestedTpPct ?? ""}"/>
         </div>
-        <button class="buy-btn" onclick="paperBuy('${addr}','${sym}')">
+        <div class="trade-row">
+          <input class="trade-input" id="tradeTrail" type="number" step="1" placeholder="Trailing stop % (opt, adaptive)"/>
+        </div>
+        <button class="buy-btn" onclick="paperBuy('${addr}')">
           📈 Open Paper Position
         </button>
       </div>
@@ -365,7 +405,7 @@ function renderOpenPositions() {
     return `
     <div class="pos-card" id="poscard-${p.id}">
       <div class="pos-card-head">
-        <span class="pos-card-sym">$${p.symbol}</span>
+        <span class="pos-card-sym">$${esc(p.symbol)}</span>
         <span class="pos-card-pnl" id="pnl-${p.id}" style="color:var(--dim)">loading…</span>
       </div>
       <div class="pos-card-grid">
@@ -373,7 +413,8 @@ function renderOpenPositions() {
         <div><div class="pos-card-lbl">Size</div><div class="pos-card-val">${p.amount_sol} SOL</div></div>
         <div><div class="pos-card-lbl">SL / TP</div><div class="pos-card-val">${slTxt} / ${tpTxt}</div></div>
         <div><div class="pos-card-lbl">Hold</div><div class="pos-card-val">${holdTxt}</div></div>
-        ${p.notes ? `<div style="grid-column:1/-1"><div class="pos-card-lbl">Note</div><div class="pos-card-val" style="color:var(--dim);font-size:10px">${p.notes}</div></div>` : ""}
+        ${p.trailing_stop_pct ? `<div><div class="pos-card-lbl">Trail</div><div class="pos-card-val">${p.trailing_stop_pct}% off peak ($${fmtPrice(p.peak_price)})</div></div>` : ""}
+        ${p.notes ? `<div style="grid-column:1/-1"><div class="pos-card-lbl">Note</div><div class="pos-card-val" style="color:var(--dim);font-size:10px">${esc(p.notes)}</div></div>` : ""}
       </div>
       <div class="pos-card-actions">
         <button class="pos-btn half"   onclick="paperSell('${p.id}',0.25)">Sell 25%</button>
@@ -403,7 +444,7 @@ function renderJournal() {
     const holdTxt = holdMin < 60 ? `${holdMin}m` : holdMin < 1440 ? `${(holdMin/60).toFixed(1)}h` : `${(holdMin/1440).toFixed(1)}d`;
     const reasonClass = `reason-${p.reason.replace(/ /g,"-")}`;
     return `<tr>
-      <td style="font-weight:700">$${p.symbol}</td>
+      <td style="font-weight:700">$${esc(p.symbol)}</td>
       <td style="font-family:monospace">$${fmtPrice(p.entry_price)}</td>
       <td style="font-family:monospace">$${fmtPrice(p.exit_price)}</td>
       <td>${p.amount_sol} SOL</td>
@@ -477,26 +518,46 @@ async function quickBuy() {
 }
 
 // Quick-fill address from token row click
-function fillQuickBuy(address, symbol) {
+function fillQuickBuy(address) {
+  const t = allTokens.find(x => x.address === address);
   el("qbAddr").value = address;
-  el("qbStatus").textContent = `$${symbol} selected`;
+  el("qbStatus").textContent = `$${t?.symbol || "?"} selected`;
   el("qbStatus").style.color = "var(--blue)";
 }
 
-async function paperBuy(address, symbol) {
-  const amountSol = parseFloat(el("qbSol")?.value || "0.5");
-  const slPct     = parseFloat(el("qbSl")?.value  || "20");
-  const tpPct     = parseFloat(el("qbTp")?.value  || "50");
+async function paperBuy(address) {
+  // Reads the detail panel's own Paper Trade form (tradeAmount/tradeSl/
+  // tradeTp/tradeTrail) — previously this silently read the unrelated
+  // Quick Buy bar fields instead, so whatever the user typed here was
+  // ignored. Falls back to the moonshot-adaptive suggestion when a field
+  // is left blank rather than a fixed default.
+  const t = allTokens.find(x => x.address === address);
+  const moonshot = t?.moonshot;
+
+  const amountSol = parseFloat(el("tradeAmount")?.value || "0.1");
+  const slRaw     = el("tradeSl")?.value;
+  const tpRaw     = el("tradeTp")?.value;
+  const trailRaw  = el("tradeTrail")?.value;
+
+  const slPct    = slRaw    !== "" && slRaw    !== undefined ? parseFloat(slRaw)    : (moonshot?.suggestedSlPct ?? undefined);
+  const tpPct    = tpRaw    !== "" && tpRaw    !== undefined ? parseFloat(tpRaw)    : (moonshot?.suggestedTpPct ?? undefined);
+  const trailPct = trailRaw !== "" && trailRaw !== undefined ? parseFloat(trailRaw) : undefined;
+
   if (!amountSol || amountSol <= 0) return toast("❌ Enter a valid SOL amount", true);
   try {
     const r = await fetch(`${API_URL}/positions/buy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address, amountSol, slPct: isNaN(slPct) ? undefined : slPct, tpPct: isNaN(tpPct) ? undefined : tpPct }),
+      body: JSON.stringify({
+        address, amountSol,
+        slPct: isNaN(slPct) ? undefined : slPct,
+        tpPct: isNaN(tpPct) ? undefined : tpPct,
+        trailingStopPct: trailPct === undefined || isNaN(trailPct) ? undefined : trailPct,
+      }),
     });
     const d = await r.json();
     if (!r.ok) return toast(`❌ ${d.error || "Failed to open position"}`, true);
-    toast(`✅ Opened $${symbol} — ${amountSol} SOL @ $${fmtPrice(d.position.entry_price)}`);
+    toast(`✅ Opened $${d.position.symbol} — ${amountSol} SOL @ $${fmtPrice(d.position.entry_price)}`);
     await loadPositions();
   } catch { toast("❌ Backend unreachable", true); }
 }
@@ -547,7 +608,7 @@ function addFeedItemRaw(symbol, score, vol, ts, address) {
   el.className = "alert-item";
   el.innerHTML = `
     <span class="alert-time">${fmtTime(ts)}</span>
-    <div class="alert-sym">🚀 $${symbol}</div>
+    <div class="alert-sym">🚀 $${esc(symbol)}</div>
     <div class="alert-meta">Score: ${score}/100 · ${fmtUsd(vol || 0)} vol</div>`;
   el.onclick = () => selectToken(address);
   feed.insertBefore(el, feed.firstChild);

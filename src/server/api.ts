@@ -4,12 +4,27 @@ import rateLimit from "@fastify/rate-limit";
 import staticFiles from "@fastify/static";
 import websocketPlugin from "@fastify/websocket";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { AppEnv } from "../config/env.js";
 import type { Repository } from "../db/repository.js";
 import type { ScreenerService } from "../services/screenerService.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function resolveDashboardRoot(): string {
+  const candidates = [
+    path.join(__dirname, "../../public/dashboard"),
+    path.join(process.cwd(), "public", "dashboard"),
+    path.join(process.cwd(), "../public/dashboard"),
+  ];
+  for (const dir of candidates) {
+    const test = path.resolve(dir);
+    if (fs.existsSync(test)) return test;
+  }
+  // fallback that will log a clear error at boot
+  return path.resolve(path.join(__dirname, "../../public/dashboard"));
+}
 
 export type BroadcastFn = (type: string, data: unknown) => void;
 
@@ -30,9 +45,12 @@ export async function buildServer(
   await app.register(cors, { origin: true });
   await app.register(rateLimit, { max: 120, timeWindow: "1 minute" });
   await app.register(websocketPlugin);
+  const dashboardRoot = resolveDashboardRoot();
+  console.log(`[STATIC] Dashboard root: ${dashboardRoot}`);
   await app.register(staticFiles, {
-    root: path.join(__dirname, "../../public/dashboard"),
+    root: dashboardRoot,
     prefix: "/",
+    index: ["index.html"],
   });
 
   // ── WebSocket clients ──────────────────────────────────────────────────
@@ -155,9 +173,12 @@ export async function buildServer(
   });
 
   app.post<{
-    Body: { address: string; amountSol: number; slPct?: number; tpPct?: number; notes?: string };
+    Body: {
+      address: string; amountSol: number; slPct?: number; tpPct?: number;
+      trailingStopPct?: number; notes?: string;
+    };
   }>("/api/positions/buy", async (req, reply) => {
-    const { address, amountSol, slPct, tpPct, notes } = req.body ?? {};
+    const { address, amountSol, slPct, tpPct, trailingStopPct, notes } = req.body ?? {};
     if (!address || !amountSol || amountSol <= 0) {
       return reply.status(400).send({ error: "address and amountSol (>0) required" });
     }
@@ -170,8 +191,9 @@ export async function buildServer(
       symbol:     screened.symbol,
       entryPrice: screened.priceUsd,
       amountSol,
-      slPct:  slPct  ?? null,
-      tpPct:  tpPct  ?? null,
+      slPct:           slPct           ?? null,
+      tpPct:           tpPct           ?? null,
+      trailingStopPct: trailingStopPct ?? null,
       notes:  notes  ?? undefined,
     });
 
