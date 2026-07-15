@@ -62,33 +62,16 @@ if %retries% gtr 15 (
 )
 >nul 2>&1 curl -s http://localhost:3002/api/status || goto healthloop
 
-REM Wait for initial scan to complete (poll lastScan, timeout 120s)
-echo [WAIT] Waiting for initial scan to finish... (max 120s)
-set "scanWait=0"
-:scanloop
-timeout /t 5 /nobreak >nul
-set /a scanWait+=5
-if %scanWait% gtr 120 (
-    echo [WARN] Initial scan still running, continuing anyway...
-    goto scandonepoll
-)
->nul 2>&1 powershell -NoProfile -Command "try { $d = (Invoke-WebRequest -Uri 'http://localhost:3002/api/status' -UseBasicParsing -TimeoutSec 4).Content | ConvertFrom-Json; if ($d.lastScan) { exit 0 } else { exit 1 } } catch { exit 1 }" && goto scanendwait
-goto scanloop
-:scanendwait
-echo [OK] Initial scan complete.
-:scandonepoll
+REM Open browser first — scan runs in background, dashboard syncs via WebSocket
+echo [BROWSER] Opening dashboard...
+start http://localhost:3002
 
-REM Fetch and display wallet balance + PnL from the API
+REM Fetch current wallet balance + PnL (best-effort, scan may still be running)
 echo.
 echo ╔══════════════════════════════════════════════════╗
 echo ║  MemeScreener 4.0 — Portfolio Summary            ║
 echo ╚══════════════════════════════════════════════════╝
 powershell -NoProfile -Command "$r = Invoke-WebRequest 'http://localhost:3002/api/positions' -UseBasicParsing -TimeoutSec 4; $d = $r.Content | ConvertFrom-Json; $s = $d.stats; echo '║  Paper Wallet: ' + $d.walletBalance.ToString('F4') + ' SOL'; echo '║  Open Positions: ' + $d.open.Count; echo '║  Realized PnL: ' + $s.realizedPnlSol.ToString('F4') + ' SOL'; echo '║  Win Rate: ' + $s.winRate.ToString('F1') + '% (' + $s.totalTrades + ' closed)'; if ($s.avgHoldMinutes -ne $null) { if ($s.avgHoldMinutes -lt 60) { $ht = [Math]::Round($s.avgHoldMinutes).ToString() + 'm' } else { $ht = [Math]::Round($s.avgHoldMinutes / 60, 1).ToString() + 'h' }; echo '║  Avg Hold: ' + $ht }"
-
-REM Open the dashboard in default browser
-echo.
-echo [BROWSER] Opening dashboard...
-start http://localhost:3002
 
 echo.
 echo ╔══════════════════════════════════════════════════╗
