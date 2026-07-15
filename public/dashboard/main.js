@@ -353,6 +353,7 @@ let autoTradeCfg = { enabled: false, solPerTrade: 0.5, maxPositions: 5, minTier:
 async function loadPositions() {
   try {
     const r = await fetch(`${API_URL}/positions`);
+    if (!r.ok) return false;
     const d = await r.json();
     openPositions   = d.open   || [];
     closedPositions = d.closed || [];
@@ -363,7 +364,8 @@ async function loadPositions() {
     renderOpenPositions();
     renderJournal();
     schedulePnlPoll();
-  } catch { /* backend offline — silently skip */ }
+    return true;
+  } catch { return false; }
 }
 
 function renderPortfolioHeader() {
@@ -750,4 +752,12 @@ function fmtTime(iso) {
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+// Poll loadPositions until it succeeds (server may still be warming up)
+let _bootRetries = 0;
+(function bootLoad() {
+  loadPositions().then(ok => {
+    if (!ok && _bootRetries++ < 10) setTimeout(bootLoad, 2000);
+  });
+})();
+
 connectWS();
