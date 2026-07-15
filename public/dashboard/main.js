@@ -368,35 +368,36 @@ async function loadPositions() {
   } catch { return false; }
 }
 
+function tx(id) { const e = document.getElementById(id); return e || { textContent: "", style: {} }; }
 function renderPortfolioHeader() {
   const s  = pnlStats;
   const rz = s.realizedPnlSol ?? s.totalPnlSol ?? 0;
   const rzColor = rz >= 0 ? "var(--lime)" : "var(--red)";
   const rzSign  = rz >= 0 ? "+" : "";
 
-  el("portRealized").textContent = `${rzSign}${rz.toFixed(4)} SOL`;
-  el("portRealized").style.color = rzColor;
-  el("portWinRate").textContent  = `${(s.winRate ?? 0).toFixed(1)}% win rate`;
-  el("portAtRisk").textContent   = `${(s.solAtRisk ?? 0).toFixed(3)} SOL`;
-  el("portOpenCount").textContent= `${openPositions.length} open positions`;
-  el("portTrades").textContent   = s.totalTrades ?? 0;
-  el("portBest").textContent     = s.bestTradePct  != null ? `best +${s.bestTradePct.toFixed(1)}%`  : "best —";
-  el("portWorst").textContent    = s.worstTradePct != null ? `worst ${s.worstTradePct.toFixed(1)}%` : "worst —";
+  tx("portRealized").textContent = `${rzSign}${rz.toFixed(4)} SOL`;
+  tx("portRealized").style.color = rzColor;
+  tx("portWinRate").textContent  = `${(s.winRate ?? 0).toFixed(1)}% win rate`;
+  tx("portAtRisk").textContent   = `${(s.solAtRisk ?? 0).toFixed(3)} SOL`;
+  tx("portOpenCount").textContent= `${openPositions.length} open positions`;
+  tx("portTrades").textContent   = s.totalTrades ?? 0;
+  tx("portBest").textContent     = s.bestTradePct  != null ? `best +${s.bestTradePct.toFixed(1)}%`  : "best —";
+  tx("portWorst").textContent    = s.worstTradePct != null ? `worst ${s.worstTradePct.toFixed(1)}%` : "worst —";
 
   // wallet balance + auto-trade
   const wb = walletBalance ?? 0;
-  el("portWallet").textContent = `${wb.toFixed(4)} SOL`;
-  el("portWallet").style.color = wb > 0 ? "var(--lime)" : "var(--red)";
+  tx("portWallet").textContent = `${wb.toFixed(4)} SOL`;
+  tx("portWallet").style.color = wb > 0 ? "var(--lime)" : "var(--red)";
   const at = autoTradeCfg;
-  el("portAutoTrade").textContent = at.enabled
+  tx("portAutoTrade").textContent = at.enabled
     ? `auto: ${at.solPerTrade}SOL × ${at.maxPositions}max (≥${at.minTier}, ≥${at.minScore})`
     : "auto-trade: off";
 
   // unrealized from poll
   const urColor = unrealizedPnl >= 0 ? "var(--lime)" : "var(--red)";
   const urSign  = unrealizedPnl >= 0 ? "+" : "";
-  el("portUnrealized").textContent = unrealizedPnl !== 0 ? `${urSign}${unrealizedPnl.toFixed(4)} SOL` : "— SOL";
-  el("portUnrealized").style.color = unrealizedPnl !== 0 ? urColor : "var(--text)";
+  tx("portUnrealized").textContent = unrealizedPnl !== 0 ? `${urSign}${unrealizedPnl.toFixed(4)} SOL` : "— SOL";
+  tx("portUnrealized").style.color = unrealizedPnl !== 0 ? urColor : "var(--text)";
 }
 
 function renderOpenPositions() {
