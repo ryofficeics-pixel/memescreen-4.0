@@ -241,8 +241,15 @@ export class TelegramService {
         );
       }
 
+      if (!this.repo.deductWallet(amount)) {
+        return ctx.reply(`❌ Insufficient paper wallet balance (${this.repo.getWalletBalance().toFixed(4)} SOL)`);
+      }
+
       const screened = await this.screener.checkAddress(address);
-      if (!screened) return ctx.reply("❌ Token not found on DexScreener");
+      if (!screened) {
+        this.repo.creditWallet(amount);
+        return ctx.reply("❌ Token not found on DexScreener");
+      }
 
       // Auto-fill from the adaptive moonshot suggestion if the user left
       // SL/TP unset (or passed "-") rather than defaulting to nothing —
@@ -279,6 +286,7 @@ export class TelegramService {
         `${autoFilled ? " (auto-filled from moonshot suggestion)" : ""}\n` +
         `Trailing stop: ${pos.trailing_stop_pct ? `${pos.trailing_stop_pct}% off peak` : "none — fixed TP only"}` +
         moonshotNote + `\n` +
+        `Wallet: ${this.repo.getWalletBalance().toFixed(4)} SOL\n` +
         `ID: \`${pos.id}\``,
         { parse_mode: "Markdown" }
       );
@@ -301,12 +309,15 @@ export class TelegramService {
       const closed = this.repo.positions.closePosition(positionId, fraction, screened.priceUsd, "manual");
       if (!closed) return ctx.reply("❌ Close failed");
 
+      this.repo.creditWallet(closed.amount_sol);
+
       const pnlEmoji = (closed.pnl_pct ?? 0) >= 0 ? "🟢" : "🔴";
       await ctx.reply(
         `${pnlEmoji} *Position closed* (${(fraction * 100).toFixed(0)}%)\n\n` +
         `Token: $${closed.symbol}\n` +
         `Entry: $${fmtPrice(closed.entry_price)} → Exit: $${fmtPrice(closed.exit_price)}\n` +
-        `PnL: ${closed.pnl_pct?.toFixed(2) ?? "—"}% (${closed.pnl_sol?.toFixed(4) ?? "—"} SOL)`,
+        `PnL: ${closed.pnl_pct?.toFixed(2) ?? "—"}% (${closed.pnl_sol?.toFixed(4) ?? "—"} SOL)\n` +
+        `Wallet: ${this.repo.getWalletBalance().toFixed(4)} SOL`,
         { parse_mode: "Markdown" }
       );
     });
@@ -340,6 +351,31 @@ export class TelegramService {
         `⏱ Avg hold: ${holdTxt}\n` +
         `📈 Best trade: ${s.bestTradePct != null ? `+${s.bestTradePct.toFixed(1)}%` : "—"}\n` +
         `📉 Worst trade: ${s.worstTradePct != null ? `${s.worstTradePct.toFixed(1)}%` : "—"}`,
+        { parse_mode: "Markdown" }
+      );
+    });
+
+    // /wallet — show paper wallet balance
+    this.bot.command("wallet", async ctx => {
+      const bal = this.repo.getWalletBalance();
+      const open = this.repo.positions.listOpenPositions();
+      const at   = this.repo.getAutoTradeEnabled();
+      await ctx.reply(
+        `👛 *Paper Wallet*\n\n` +
+        `Balance: \`${bal.toFixed(4)} SOL\`\n` +
+        `Open positions: ${open.length}\n` +
+        `Auto-trade: ${at ? "✅ ON" : "❌ OFF"}`,
+        { parse_mode: "Markdown" }
+      );
+    });
+
+    // /autotrade — toggle auto-trade on/off
+    this.bot.command("autotrade", async ctx => {
+      const current = this.repo.getAutoTradeEnabled();
+      this.repo.setAutoTradeEnabled(!current);
+      await ctx.reply(
+        `🤖 Auto-trade is now *${!current ? "ENABLED" : "DISABLED"}*\n` +
+        `${!current ? "Will auto-buy alert-tier tokens on next scan." : "Manual trading only."}`,
         { parse_mode: "Markdown" }
       );
     });

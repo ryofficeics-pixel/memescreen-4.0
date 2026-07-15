@@ -38,6 +38,14 @@ const schema = z.object({
 
   MAX_ALERTS_PER_HOUR:    z.coerce.number().int().positive().default(10),
 
+  // ── Auto-trade (paper wallet) ────────────────────────────────────────────
+  AUTO_TRADE_ENABLED:      z.string().default("false"),
+  AUTO_TRADE_SOL_PER_TRADE: z.coerce.number().positive().default(0.5),
+  AUTO_TRADE_MAX_POSITIONS: z.coerce.number().int().positive().default(5),
+  // Min tier to auto-buy: "S" only, or "A" (includes S+A)
+  AUTO_TRADE_MIN_TIER:     z.enum(["S", "A", "B"]).default("A"),
+  AUTO_TRADE_MIN_SCORE:    z.coerce.number().int().min(0).max(100).default(60),
+
   DATABASE_PATH: z.string().default("./data/screener.db"),
 });
 

@@ -123,6 +123,11 @@ export class ScreenerService {
 
           if (screened.decision === "alert") {
             await this.onAlert(screened);
+
+            // ── Auto-trade ───────────────────────────────────────────────
+            if (this.repo.getAutoTradeEnabled()) {
+              await this.autoTrade(screened);
+            }
           }
 
         } catch (err) {
@@ -158,6 +163,7 @@ export class ScreenerService {
         }
         const triggered = this.repo.positions.checkTriggers(candidatePrices);
         for (const closed of triggered) {
+          this.repo.creditWallet(closed.amount_sol);
           this.broadcast("POSITION_CLOSED", closed);
           console.log(`[SL/TP] ${closed.symbol} closed: ${closed.reason} @ $${closed.exit_price}`);
         }
@@ -356,6 +362,39 @@ export class ScreenerService {
     console.log(`[SCREENER] Fetched ${candidates.length} unique tokens (${multiCount} multi-source confirmed) from ${sources.length} source(s)`);
 
     return { candidates, statuses };
+  }
+
+  // ── Auto-trade: paper-buy alert tokens automatically ─────────────────────
+  private async autoTrade(screened: ScreenedTokenV40): Promise<void> {
+    const tierRank: Record<string, number> = { S: 4, A: 3, B: 2, C: 1, REJECT: 0 };
+    const minRank = tierRank[this.env.AUTO_TRADE_MIN_TIER] ?? 3;
+    const tokRank = tierRank[screened.tier] ?? 0;
+    if (tokRank < minRank) return;
+
+    if (screened.finalScore < this.env.AUTO_TRADE_MIN_SCORE) return;
+
+    const openPositions = this.repo.positions.listOpenPositions();
+    if (openPositions.length >= this.env.AUTO_TRADE_MAX_POSITIONS) return;
+
+    const amountSol = this.env.AUTO_TRADE_SOL_PER_TRADE;
+    if (!this.repo.deductWallet(amountSol)) return;
+
+    try {
+      const pos = this.repo.positions.openPosition({
+        address:    screened.address,
+        symbol:     screened.symbol,
+        entryPrice: screened.priceUsd,
+        amountSol,
+        slPct: screened.moonshot.suggestedSlPct ?? 25,
+        tpPct: null, // rely on trailing stop if moonshot suggests one
+        trailingStopPct: screened.moonshot.isMoonshotCandidate ? 30 : null,
+      });
+      this.broadcast("POSITION_OPENED", pos);
+      console.log(`[AUTO] Bought $${screened.symbol} ${amountSol} SOL @ $${screened.priceUsd}`);
+    } catch (e) {
+      this.repo.creditWallet(amountSol);
+      console.error(`[AUTO] Buy failed for ${screened.symbol}:`, e);
+    }
   }
 }
 

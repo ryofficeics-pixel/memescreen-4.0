@@ -347,6 +347,8 @@ function renderDetail(t) {
 // ─── Paper trading ───────────────────────────────────────────────────────────
 let pnlPollTimer = null;
 let unrealizedPnl = 0;
+let walletBalance = 0;
+let autoTradeCfg = { enabled: false, solPerTrade: 0.5, maxPositions: 5, minTier: "A", minScore: 60 };
 
 async function loadPositions() {
   try {
@@ -355,6 +357,8 @@ async function loadPositions() {
     openPositions   = d.open   || [];
     closedPositions = d.closed || [];
     pnlStats        = d.stats  || pnlStats;
+    walletBalance   = d.walletBalance ?? 0;
+    autoTradeCfg    = d.autoTrade || autoTradeCfg;
     renderPortfolioHeader();
     renderOpenPositions();
     renderJournal();
@@ -377,9 +381,13 @@ function renderPortfolioHeader() {
   el("portBest").textContent     = s.bestTradePct  != null ? `best +${s.bestTradePct.toFixed(1)}%`  : "best —";
   el("portWorst").textContent    = s.worstTradePct != null ? `worst ${s.worstTradePct.toFixed(1)}%` : "worst —";
 
-  // avg hold time
-  const ah = s.avgHoldMinutes;
-  el("portAvgHold").textContent = ah != null ? (ah < 60 ? `${Math.round(ah)}m` : `${(ah/60).toFixed(1)}h`) : "—";
+  // wallet balance + auto-trade
+  el("portWallet").textContent = `${walletBalance.toFixed(4)} SOL`;
+  el("portWallet").style.color = walletBalance > 0 ? "var(--lime)" : "var(--red)";
+  const at = autoTradeCfg;
+  el("portAutoTrade").textContent = at.enabled
+    ? `auto: ${at.solPerTrade}SOL × ${at.maxPositions}max (≥${at.minTier}, ≥${at.minScore})`
+    : "auto-trade: off";
 
   // unrealized from poll
   const urColor = unrealizedPnl >= 0 ? "var(--lime)" : "var(--red)";

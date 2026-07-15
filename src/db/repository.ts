@@ -148,6 +148,13 @@ export class Repository {
     }
 
     this.positions.init();
+
+    // Paper wallet: seed 1 SOL on first run
+    if (this.getSetting("paper_wallet_balance") === null) {
+      this.setWalletBalance(1);
+      console.log("[WALLET] Seeded paper wallet with 1 SOL");
+    }
+
     console.log("[DB] Schema ready (v4.0)");
   }
 
@@ -417,6 +424,37 @@ export class Repository {
       lastScan:       this.getLastScan(),
       alertsLastHour: this.countAlertsLastHour(),
     };
+  }
+
+  // ── Paper wallet ──────────────────────────────────────────────────────────
+  getWalletBalance(): number {
+    const bal = this.getSetting("paper_wallet_balance");
+    return bal !== null ? parseFloat(bal) : 0;
+  }
+
+  setWalletBalance(amount: number): void {
+    this.setSetting("paper_wallet_balance", amount.toFixed(6));
+  }
+
+  deductWallet(amount: number): boolean {
+    const bal = this.getWalletBalance();
+    if (bal < amount) return false;
+    this.setWalletBalance(bal - amount);
+    return true;
+  }
+
+  creditWallet(amount: number): void {
+    const bal = this.getWalletBalance();
+    this.setWalletBalance(bal + amount);
+  }
+
+  // ── Auto-trade config (runtime toggleable) ──────────────────────────────
+  getAutoTradeEnabled(): boolean {
+    return this.getSetting("auto_trade_enabled") === "true";
+  }
+
+  setAutoTradeEnabled(enabled: boolean): void {
+    this.setSetting("auto_trade_enabled", enabled ? "true" : "false");
   }
 
   close(): void { this.db.close(); }

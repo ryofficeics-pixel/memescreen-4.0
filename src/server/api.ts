@@ -152,11 +152,19 @@ export async function buildServer(
 
   // ── Paper trading ─────────────────────────────────────────────────────
 
-  // GET /api/positions — full portfolio snapshot
+  // GET /api/positions — full portfolio snapshot + wallet
   app.get("/api/positions", async () => ({
     open:   repo.positions.listOpenPositions(),
     closed: repo.positions.listClosedPositions(100),
     stats:  repo.positions.getPnlStats(),
+    walletBalance: repo.getWalletBalance(),
+    autoTrade: {
+      enabled:     repo.getAutoTradeEnabled(),
+      solPerTrade: env.AUTO_TRADE_SOL_PER_TRADE,
+      maxPositions: env.AUTO_TRADE_MAX_POSITIONS,
+      minTier:     env.AUTO_TRADE_MIN_TIER,
+      minScore:    env.AUTO_TRADE_MIN_SCORE,
+    },
   }));
 
   // GET /api/positions/:id/pnl — live unrealized P&L for one open position
@@ -183,8 +191,19 @@ export async function buildServer(
       return reply.status(400).send({ error: "address and amountSol (>0) required" });
     }
 
+    // Check wallet balance
+    if (!repo.deductWallet(amountSol)) {
+      return reply.status(402).send({
+        error: "Insufficient paper wallet balance",
+        walletBalance: repo.getWalletBalance(),
+      });
+    }
+
     const screened = await screener.checkAddress(address);
-    if (!screened) return reply.status(404).send({ error: "Token not found on DexScreener" });
+    if (!screened) {
+      repo.creditWallet(amountSol); // refund
+      return reply.status(404).send({ error: "Token not found on DexScreener" });
+    }
 
     const pos = repo.positions.openPosition({
       address:    screened.address,
@@ -198,7 +217,7 @@ export async function buildServer(
     });
 
     broadcast("POSITION_OPENED", pos);
-    return reply.status(201).send({ position: pos });
+    return reply.status(201).send({ position: pos, walletBalance: repo.getWalletBalance() });
   });
 
   app.post<{
@@ -215,8 +234,12 @@ export async function buildServer(
     const closed = repo.positions.closePosition(req.params.id, fraction, screened.priceUsd, "manual");
     if (!closed) return reply.status(500).send({ error: "Close failed" });
 
+    // Credit wallet: return the closed amount at current price
+    const returnAmount = closed.amount_sol;
+    repo.creditWallet(returnAmount);
+
     broadcast("POSITION_CLOSED", closed);
-    return { closed };
+    return { closed, walletBalance: repo.getWalletBalance() };
   });
 
   return { app, broadcast };
