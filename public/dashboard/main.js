@@ -392,6 +392,12 @@ function renderPortfolioHeader() {
   tx("portAutoTrade").textContent = at.enabled
     ? `auto: ${at.solPerTrade}SOL × ${at.maxPositions}max (≥${at.minTier}, ≥${at.minScore})`
     : "auto-trade: off";
+  const btn = document.getElementById("autoTradeBtn");
+  if (btn) {
+    btn.textContent = at.enabled ? "ON" : "OFF";
+    btn.style.borderColor = at.enabled ? "var(--lime)" : "var(--red)";
+    btn.style.color = at.enabled ? "var(--lime)" : "var(--red)";
+  }
 
   // unrealized from poll
   const urColor = unrealizedPnl >= 0 ? "var(--lime)" : "var(--red)";
@@ -750,6 +756,16 @@ function fmtAge(m) {
 function fmtTime(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+}
+
+// ─── Auto-trade toggle ───────────────────────────────────────────────────────────
+async function toggleAutoTrade() {
+  try {
+    const r = await fetch(`${API_URL}/auto-trade/toggle`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const d = await r.json();
+    autoTradeCfg.enabled = d.enabled;
+    renderPortfolioHeader();
+  } catch {}
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────

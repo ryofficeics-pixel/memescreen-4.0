@@ -168,6 +168,13 @@ export async function buildServer(
     },
   }));
 
+  // POST /api/auto-trade/toggle — toggle auto-trade on/off
+  app.post("/api/auto-trade/toggle", async () => {
+    const current = repo.getAutoTradeEnabled();
+    repo.setAutoTradeEnabled(!current);
+    return { enabled: !current };
+  });
+
   // GET /api/positions/:id/pnl — live unrealized P&L for one open position
   app.get<{ Params: { id: string } }>("/api/positions/:id/pnl", async (req, reply) => {
     const pos = repo.positions.getPosition(req.params.id);
