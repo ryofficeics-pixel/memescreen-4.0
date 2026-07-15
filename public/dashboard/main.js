@@ -382,8 +382,9 @@ function renderPortfolioHeader() {
   el("portWorst").textContent    = s.worstTradePct != null ? `worst ${s.worstTradePct.toFixed(1)}%` : "worst —";
 
   // wallet balance + auto-trade
-  el("portWallet").textContent = `${walletBalance.toFixed(4)} SOL`;
-  el("portWallet").style.color = walletBalance > 0 ? "var(--lime)" : "var(--red)";
+  const wb = walletBalance ?? 0;
+  el("portWallet").textContent = `${wb.toFixed(4)} SOL`;
+  el("portWallet").style.color = wb > 0 ? "var(--lime)" : "var(--red)";
   const at = autoTradeCfg;
   el("portAutoTrade").textContent = at.enabled
     ? `auto: ${at.solPerTrade}SOL × ${at.maxPositions}max (≥${at.minTier}, ≥${at.minScore})`

@@ -51,6 +51,7 @@ export async function buildServer(
     root: dashboardRoot,
     prefix: "/",
     index: ["index.html"],
+    setHeaders: (res) => { res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate"); },
   });
 
   // ── WebSocket clients ──────────────────────────────────────────────────
