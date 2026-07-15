@@ -758,6 +758,14 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
 }
 
+// ─── Graceful shutdown ─────────────────────────────────────────────────────────
+async function shutdownServer() {
+  if (!confirm("Stop the server?")) return;
+  try {
+    await fetch(`${API_URL}/shutdown`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  } catch {}
+}
+
 // ─── Auto-trade toggle ───────────────────────────────────────────────────────────
 async function toggleAutoTrade() {
   try {

@@ -31,7 +31,8 @@ export type BroadcastFn = (type: string, data: unknown) => void;
 export async function buildServer(
   env: AppEnv,
   repo: Repository,
-  screener: ScreenerService
+  screener: ScreenerService,
+  onShutdown?: () => Promise<void>
 ) {
   const app = Fastify({
     logger: {
@@ -248,6 +249,13 @@ export async function buildServer(
 
     broadcast("POSITION_CLOSED", closed);
     return { closed, walletBalance: repo.getWalletBalance() };
+  });
+
+  // POST /api/shutdown — graceful stop
+  app.post("/api/shutdown", async (_req, reply) => {
+    // Don't await — reply first so the client gets confirmation
+    setImmediate(() => { onShutdown?.(); });
+    return reply.send({ status: "shutting_down" });
   });
 
   return { app, broadcast };

@@ -31,7 +31,7 @@ async function main() {
   });
 
   // 5. Fastify server (sets screener.setBroadcast internally)
-  const { app } = await buildServer(env, repo, screener);
+  const { app } = await buildServer(env, repo, screener, () => shutdown("API"));
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
   console.log(`[SERVER] Dashboard → http://localhost:${env.PORT}`);
 
