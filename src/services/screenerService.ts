@@ -83,8 +83,11 @@ export class ScreenerService {
       console.log(`[SCREENER] ${candidates.length} candidates`);
       this.broadcast("SCAN_FETCHED", { runId, count: candidates.length });
 
-      // Collect candidate prices for SL/TP evaluation
-      const candidatePrices = new Map<string, number>();
+      // Build a set of open position addresses for O(1) SL/TP check per candidate
+      const openPosSet = new Map<string, string>();
+      for (const p of this.repo.positions.listOpenPositions()) {
+        openPosSet.set(p.address, p.id);
+      }
 
       for (let i = 0; i < candidates.length; i++) {
         const candidate = candidates[i]!;
@@ -97,7 +100,18 @@ export class ScreenerService {
           const screened = await this.screenOne(candidate);
           summary.totalCandidates++;
 
-          candidatePrices.set(candidate.address, candidate.priceUsd);
+          // ── Per-candidate SL/TP check ───────────────────────────────
+          // Uses the candidate's FRESH price before it goes stale.
+          if (openPosSet.has(candidate.address)) {
+            const priceMap = new Map([[candidate.address, candidate.priceUsd]]);
+            const triggered = this.repo.positions.checkTriggers(priceMap);
+            for (const closed of triggered) {
+              this.repo.creditWallet(closed.amount_sol);
+              this.broadcast("POSITION_CLOSED", closed);
+              console.log(`[SL/TP] ${closed.symbol} closed: ${closed.reason} @ $${closed.exit_price}`);
+              openPosSet.delete(candidate.address);
+            }
+          }
 
           // Tier-change detection
           const prevTier = this.repo.getPreviousTier(candidate.address);
@@ -139,7 +153,8 @@ export class ScreenerService {
 
       summary.durationMs = Date.now() - t0;
 
-      // ── Post-scan SL/TP check for ALL open positions ──────────────────────
+      // ── Post-scan SL/TP check for remaining open positions ───────────────
+      // Tokens that didn't appear in the candidate list get a dedicated fetch.
       await this.checkSlTp();
 
       this.repo.saveScan(summary);
@@ -345,16 +360,43 @@ export class ScreenerService {
 
     const prices = new Map<string, number>();
     for (const pos of openPositions) {
-      try {
-        const candidate = await this.dex.fetchByTokenAddress(pos.address);
-        if (candidate && candidate.priceUsd > 0) {
-          prices.set(candidate.address, candidate.priceUsd);
+      let price: number | null = null;
+
+      // Attempt 1: DexScreener (primary)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const candidate = await this.dex.fetchByTokenAddress(pos.address);
+          if (candidate && candidate.priceUsd > 0) {
+            price = candidate.priceUsd;
+            break;
+          }
+        } catch { /* retry */ }
+        if (attempt < 2) await sleep(1000);
+      }
+
+      // Attempt 2: Jupiter price API (fallback)
+      if (price === null) {
+        try {
+          const resp = await fetch(`https://api.jup.ag/price/v2?ids=${pos.address}`, {
+            headers: { "User-Agent": "memescreener/4.0" },
+            signal:  AbortSignal.timeout(8000),
+          });
+          if (resp.ok) {
+            const body = (await resp.json()) as { data?: Record<string, { price?: string }> };
+            const jupPrice = body.data?.[pos.address]?.price;
+            const pv = jupPrice ? Number(jupPrice) : 0;
+            if (pv > 0) price = pv;
+          }
+        } catch {
+          // skip — next cycle will retry
         }
-        await sleep(500);
-      } catch {
-        // skip — next cycle will retry
+      }
+
+      if (price !== null) {
+        prices.set(pos.address, price);
       }
     }
+
     const triggered = this.repo.positions.checkTriggers(prices);
     for (const closed of triggered) {
       this.repo.creditWallet(closed.amount_sol);
