@@ -249,16 +249,21 @@ export async function buildServer(
 
   app.post<{
     Params: { id: string };
-    Body: { fraction?: number };
+    Body: { fraction?: number; exitPrice?: number };
   }>("/api/positions/:id/sell", async (req, reply) => {
     const pos = repo.positions.getPosition(req.params.id);
     if (!pos) return reply.status(404).send({ error: "Position not found or already closed" });
 
-    const screened = await screener.checkAddress(pos.address);
-    if (!screened) return reply.status(502).send({ error: "Could not fetch current price" });
+    // Allow explicit exitPrice for dead tokens DexScreener can't price
+    let exitPrice = req.body?.exitPrice;
+    if (exitPrice === undefined) {
+      const screened = await screener.checkAddress(pos.address);
+      if (!screened) return reply.status(502).send({ error: "Could not fetch current price (use exitPrice param to force close)" });
+      exitPrice = screened.priceUsd;
+    }
 
     const fraction = req.body?.fraction ?? 1;
-    const closed = repo.positions.closePosition(req.params.id, fraction, screened.priceUsd, "manual");
+    const closed = repo.positions.closePosition(req.params.id, fraction, exitPrice, "manual");
     if (!closed) return reply.status(500).send({ error: "Close failed" });
 
     // Credit wallet: return the closed amount at current price
