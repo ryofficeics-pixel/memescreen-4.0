@@ -139,6 +139,12 @@ export async function buildServer(
     return reply.status(202).send({ status: "started" });
   });
 
+  // POST /api/sltp/check — manual SL/TP trigger check
+  app.post("/api/sltp/check", async () => {
+    screener.checkSlTp().catch(e => console.error("[API] SL/TP error:", e));
+    return { status: "checking" };
+  });
+
   app.get("/api/dashboard", async () => repo.getDashboardSnapshot());
 
   app.patch<{ Params: { id: string }; Body: { action: string } }>(

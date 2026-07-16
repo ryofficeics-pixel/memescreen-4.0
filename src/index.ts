@@ -57,6 +57,12 @@ async function main() {
     screener.runScan().catch(e => console.error("[BOOT] Initial scan error:", e));
   }, 3000);
 
+  // 9b. Periodic SL/TP check every 60s (catches price moves between scans)
+  setInterval(() => {
+    screener.checkSlTp().catch(e => console.error("[SL/TP] Timer error:", e));
+  }, 60_000);
+  console.log("[SL/TP] Background check every 60s");
+
   // 10. Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\n[SHUTDOWN] ${signal}`);

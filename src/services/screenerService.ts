@@ -140,34 +140,7 @@ export class ScreenerService {
       summary.durationMs = Date.now() - t0;
 
       // ── Post-scan SL/TP check for ALL open positions ──────────────────────
-      // Fetches FRESH prices for every open position so TP/SL uses current
-      // market data, not the stale candidate-time prices from the scan loop.
-      const openPositions = this.repo.positions.listOpenPositions();
-      if (openPositions.length > 0) {
-        const freshPrices = new Map<string, number>();
-        let fetchedCount = 0;
-        for (const pos of openPositions) {
-          try {
-            const candidate = await this.dex.fetchByTokenAddress(pos.address);
-            if (candidate && candidate.priceUsd > 0) {
-              freshPrices.set(candidate.address, candidate.priceUsd);
-              fetchedCount++;
-            }
-            await sleep(500);
-          } catch (e) {
-            console.warn(`[SL/TP] Could not fetch price for ${pos.symbol}:`, e);
-          }
-        }
-        if (fetchedCount > 0) {
-          console.log(`[SL/TP] Fetched ${fetchedCount} fresh prices for open positions`);
-        }
-        const triggered = this.repo.positions.checkTriggers(freshPrices);
-        for (const closed of triggered) {
-          this.repo.creditWallet(closed.amount_sol);
-          this.broadcast("POSITION_CLOSED", closed);
-          console.log(`[SL/TP] ${closed.symbol} closed: ${closed.reason} @ $${closed.exit_price}`);
-        }
-      }
+      await this.checkSlTp();
 
       this.repo.saveScan(summary);
       this.lastSummary = summary;
@@ -362,6 +335,32 @@ export class ScreenerService {
     console.log(`[SCREENER] Fetched ${candidates.length} unique tokens (${multiCount} multi-source confirmed) from ${sources.length} source(s)`);
 
     return { candidates, statuses };
+  }
+
+  // ── Standalone SL/TP check (runs between scans) ──────────────────────────
+  /** Fetches fresh prices for all open positions and closes triggered ones. */
+  async checkSlTp(): Promise<void> {
+    const openPositions = this.repo.positions.listOpenPositions();
+    if (openPositions.length === 0) return;
+
+    const prices = new Map<string, number>();
+    for (const pos of openPositions) {
+      try {
+        const candidate = await this.dex.fetchByTokenAddress(pos.address);
+        if (candidate && candidate.priceUsd > 0) {
+          prices.set(candidate.address, candidate.priceUsd);
+        }
+        await sleep(500);
+      } catch {
+        // skip — next cycle will retry
+      }
+    }
+    const triggered = this.repo.positions.checkTriggers(prices);
+    for (const closed of triggered) {
+      this.repo.creditWallet(closed.amount_sol);
+      this.broadcast("POSITION_CLOSED", closed);
+      console.log(`[SL/TP] ${closed.symbol} closed: ${closed.reason} @ $${closed.exit_price}`);
+    }
   }
 
   // ── Auto-trade: paper-buy alert tokens automatically ─────────────────────
