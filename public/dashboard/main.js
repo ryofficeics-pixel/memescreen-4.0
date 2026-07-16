@@ -491,12 +491,17 @@ async function schedulePnlPoll() {
       // Update individual card P&L display
       const pnlEl = document.getElementById(`pnl-${openPositions[i]?.id}`);
       const card  = document.getElementById(`poscard-${openPositions[i]?.id}`);
-      if (pnlEl && d.pnlPct != null) {
-        const color = d.pnlPct >= 0 ? "var(--lime)" : "var(--red)";
-        const sign  = d.pnlPct >= 0 ? "+" : "";
-        pnlEl.textContent = `${sign}${d.pnlPct.toFixed(2)}% / ${sign}${d.pnlSol.toFixed(4)} SOL`;
-        pnlEl.style.color = color;
-        if (card) { card.classList.toggle("profit", d.pnlPct >= 0); card.classList.toggle("loss", d.pnlPct < 0); }
+      if (pnlEl) {
+        if (d.stale) {
+          pnlEl.textContent = "stale";
+          pnlEl.style.color = "var(--dim)";
+        } else if (d.pnlPct != null) {
+          const color = d.pnlPct >= 0 ? "var(--lime)" : "var(--red)";
+          const sign  = d.pnlPct >= 0 ? "+" : "";
+          pnlEl.textContent = `${sign}${d.pnlPct.toFixed(2)}% / ${sign}${d.pnlSol.toFixed(4)} SOL`;
+          pnlEl.style.color = color;
+          if (card) { card.classList.toggle("profit", d.pnlPct >= 0); card.classList.toggle("loss", d.pnlPct < 0); }
+        }
       }
     });
     renderPortfolioHeader();

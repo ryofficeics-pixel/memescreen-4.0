@@ -181,7 +181,10 @@ export async function buildServer(
     const pos = repo.positions.getPosition(req.params.id);
     if (!pos) return reply.status(404).send({ error: "Position not found" });
     const screened = await screener.checkAddress(pos.address);
-    if (!screened) return reply.status(502).send({ error: "Could not fetch price" });
+    if (!screened) {
+      const holdMin = Math.floor((Date.now() - new Date(pos.opened_at).getTime()) / 60000);
+      return { id: pos.id, symbol: pos.symbol, currentPrice: null, pnlPct: 0, pnlSol: 0, holdMin, stale: true };
+    }
     const currentPrice = screened.priceUsd;
     const pnlPct  = pos.entry_price > 0 ? ((currentPrice - pos.entry_price) / pos.entry_price) * 100 : 0;
     const pnlSol  = pos.amount_sol * (pnlPct / 100);
