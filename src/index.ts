@@ -57,15 +57,18 @@ async function main() {
     screener.runScan().catch(e => console.error("[BOOT] Initial scan error:", e));
   }, 3000);
 
-  // 9b. Native SL/TP monitor — loops continuously, no gaps
-  (async function sltpLoop() {
-    while (true) {
-      const had = repo.positions.listOpenPositions().length;
-      await screener.checkSlTp().catch(e => console.error("[SL/TP] Error:", e));
-      await new Promise(r => setTimeout(r, had > 0 ? 2000 : 10_000));
+  // 9b. SL/TP monitor — every 30s, non-overlapping
+  async function runSltp() {
+    try {
+      const n = repo.positions.listOpenPositions().length;
+      if (n > 0) await screener.checkSlTp();
+    } catch (e) {
+      console.error("[SL/TP] Fatal in monitor:", e);
     }
-  })();
-  console.log("[SL/TP] Native monitor: active=2s idle=10s continuous loop");
+  }
+  runSltp(); // immediate first run
+  setInterval(runSltp, 30_000);
+  console.log("[SL/TP] Monitor: every 30s");
 
   // 9c. Self-audit every 12 minutes — verifies SL/TP can reach every open position
   setInterval(async () => {
