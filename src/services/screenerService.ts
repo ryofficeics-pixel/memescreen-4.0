@@ -83,6 +83,9 @@ export class ScreenerService {
       console.log(`[SCREENER] ${candidates.length} candidates`);
       this.broadcast("SCAN_FETCHED", { runId, count: candidates.length });
 
+      // Collect candidate prices for post-scan diagnostics
+      const candidatePrices = new Map<string, number>();
+
       // Build a set of open position addresses for O(1) SL/TP check per candidate
       const openPosSet = new Map<string, string>();
       for (const p of this.repo.positions.listOpenPositions()) {
@@ -99,6 +102,7 @@ export class ScreenerService {
         try {
           const screened = await this.screenOne(candidate);
           summary.totalCandidates++;
+          candidatePrices.set(candidate.address, candidate.priceUsd);
 
           // ── Per-candidate SL/TP check ───────────────────────────────
           // Uses the candidate's FRESH price before it goes stale.
@@ -152,6 +156,25 @@ export class ScreenerService {
       }
 
       summary.durationMs = Date.now() - t0;
+
+      // ── Post-scan position health dump ──────────────────────────────────
+      const stillOpen = this.repo.positions.listOpenPositions();
+      if (stillOpen.length > 0) {
+        console.log(`[POSITIONS] ${stillOpen.length} open after scan:`);
+        for (const p of stillOpen) {
+          // Did this position's token appear in the candidate list?
+          const inCandidates = candidatePrices.has(p.address);
+          const lastPrice = candidatePrices.get(p.address);
+          const pnlStr = lastPrice && p.entry_price > 0
+            ? `pnl=${(((lastPrice - p.entry_price) / p.entry_price) * 100).toFixed(1)}%`
+            : "pnl=?(no scan price)";
+          console.log(
+            `  ${p.symbol.padEnd(12)} entry=$${p.entry_price} ` +
+            `sl=${p.sl_pct ?? "—"}% tp=${p.tp_pct ?? "—"}% ${pnlStr}` +
+            (inCandidates ? " (in scan)" : " (NOT in scan)")
+          );
+        }
+      }
 
       // ── Post-scan SL/TP check for remaining open positions ───────────────
       // Tokens that didn't appear in the candidate list get a dedicated fetch.
@@ -358,6 +381,7 @@ export class ScreenerService {
     const openPositions = this.repo.positions.listOpenPositions();
     if (openPositions.length === 0) return;
 
+    console.log(`[SL/TP] Checking ${openPositions.length} open position(s)...`);
     const prices = new Map<string, number>();
     for (const pos of openPositions) {
       let price: number | null = null;
@@ -368,6 +392,7 @@ export class ScreenerService {
           const candidate = await this.dex.fetchByTokenAddress(pos.address);
           if (candidate && candidate.priceUsd > 0) {
             price = candidate.priceUsd;
+            console.log(`[SL/TP] ${pos.symbol}: DexScreener → $${price} (entry $${pos.entry_price})`);
             break;
           }
         } catch { /* retry */ }
@@ -385,7 +410,10 @@ export class ScreenerService {
             const body = (await resp.json()) as { data?: Record<string, { price?: string }> };
             const jupPrice = body.data?.[pos.address]?.price;
             const pv = jupPrice ? Number(jupPrice) : 0;
-            if (pv > 0) price = pv;
+            if (pv > 0) {
+              price = pv;
+              console.log(`[SL/TP] ${pos.symbol}: Jupiter → $${price} (entry $${pos.entry_price})`);
+            }
           }
         } catch {
           // skip — next cycle will retry
@@ -394,6 +422,10 @@ export class ScreenerService {
 
       if (price !== null) {
         prices.set(pos.address, price);
+        const pnlPct = pos.entry_price > 0 ? ((price - pos.entry_price) / pos.entry_price) * 100 : 0;
+        console.log(`[SL/TP] ${pos.symbol}: price=$${price} pnl=${pnlPct.toFixed(1)}% sl=${pos.sl_pct}% tp=${pos.tp_pct}%`);
+      } else {
+        console.log(`[SL/TP] ⚠ ${pos.symbol}: NO price from DexScreener or Jupiter. Blind.`);
       }
     }
 
@@ -401,7 +433,10 @@ export class ScreenerService {
     for (const closed of triggered) {
       this.repo.creditWallet(closed.amount_sol);
       this.broadcast("POSITION_CLOSED", closed);
-      console.log(`[SL/TP] ${closed.symbol} closed: ${closed.reason} @ $${closed.exit_price}`);
+      console.log(`[SL/TP] ${closed.symbol} CLOSED: ${closed.reason} @ $${closed.exit_price}`);
+    }
+    if (triggered.length === 0) {
+      console.log(`[SL/TP] No positions triggered.`);
     }
   }
 

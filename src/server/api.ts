@@ -224,14 +224,18 @@ export async function buildServer(
       return reply.status(404).send({ error: "Token not found on DexScreener" });
     }
 
+    // Auto-fill SL/TP from moonshot suggestion when not provided
+    const useSlPct = slPct ?? screened.moonshot.suggestedSlPct
+    const useTpPct = tpPct ?? screened.moonshot.suggestedTpPct
+
     try {
       const pos = repo.positions.openPosition({
         address:    screened.address,
         symbol:     screened.symbol,
         entryPrice: screened.priceUsd,
         amountSol,
-        slPct:           slPct           ?? null,
-        tpPct:           tpPct           ?? null,
+        slPct:           useSlPct,
+        tpPct:           useTpPct,
         trailingStopPct: trailingStopPct ?? null,
         notes:  notes  ?? undefined,
       });

@@ -62,6 +62,21 @@ export class PositionsRepository {
     if (!closedCols.includes("notes")) {
       this.db.exec(`ALTER TABLE closed_positions ADD COLUMN notes TEXT`);
     }
+
+    // Backfill null SL/TP for positions opened without them
+    const nullSl = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM positions WHERE sl_pct IS NULL AND status = 'open'`
+    ).get() as { cnt: number };
+    if (nullSl.cnt > 0) {
+      this.db.exec(`UPDATE positions SET sl_pct = 25 WHERE sl_pct IS NULL AND status = 'open'`);
+      console.log(`[DB] Backfilled SL=25% for ${nullSl.cnt} open position(s)`);
+    }
+    const nullTp = this.db.prepare(
+      `SELECT COUNT(*) AS cnt FROM positions WHERE tp_pct IS NULL AND status = 'open'`
+    ).get() as { cnt: number };
+    if (nullTp.cnt > 0) {
+      console.log(`[DB] ${nullTp.cnt} open position(s) have no TP set (will use hard ceiling or manual close)`);
+    }
   }
 
   // ── Open positions ────────────────────────────────────────────────────────
