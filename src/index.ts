@@ -57,11 +57,15 @@ async function main() {
     screener.runScan().catch(e => console.error("[BOOT] Initial scan error:", e));
   }, 3000);
 
-  // 9b. Periodic SL/TP check every 60s (catches price moves between scans)
-  setInterval(() => {
-    screener.checkSlTp().catch(e => console.error("[SL/TP] Timer error:", e));
-  }, 60_000);
-  console.log("[SL/TP] Background check every 60s");
+  // 9b. Native SL/TP monitor — loops continuously, no gaps
+  (async function sltpLoop() {
+    while (true) {
+      const had = repo.positions.listOpenPositions().length;
+      await screener.checkSlTp().catch(e => console.error("[SL/TP] Error:", e));
+      await new Promise(r => setTimeout(r, had > 0 ? 2000 : 10_000));
+    }
+  })();
+  console.log("[SL/TP] Native monitor: active=2s idle=10s continuous loop");
 
   // 9c. Self-audit every 12 minutes — verifies SL/TP can reach every open position
   setInterval(async () => {
