@@ -425,7 +425,13 @@ export class ScreenerService {
         const pnlPct = pos.entry_price > 0 ? ((price - pos.entry_price) / pos.entry_price) * 100 : 0;
         console.log(`[SL/TP] ${pos.symbol}: price=$${price} pnl=${pnlPct.toFixed(1)}% sl=${pos.sl_pct}% tp=${pos.tp_pct}%`);
       } else {
-        console.log(`[SL/TP] ⚠ ${pos.symbol}: NO price from DexScreener or Jupiter. Blind.`);
+        // Neither source has this token — treat as dead (worth $0), close with stop-loss
+        const dead = this.repo.positions.closePosition(pos.id, 1, 0, "stop-loss");
+        if (dead) {
+          this.repo.creditWallet(0); // no SOL returned — total loss
+          this.broadcast("POSITION_CLOSED", dead);
+          console.log(`[SL/TP] ${pos.symbol}: no price from any source → closed as stop-loss at $0`);
+        }
       }
     }
 
