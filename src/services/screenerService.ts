@@ -140,28 +140,28 @@ export class ScreenerService {
       summary.durationMs = Date.now() - t0;
 
       // ── Post-scan SL/TP check for ALL open positions ──────────────────────
-      // Uses candidate prices from this scan + fetches any missing addresses.
+      // Fetches FRESH prices for every open position so TP/SL uses current
+      // market data, not the stale candidate-time prices from the scan loop.
       const openPositions = this.repo.positions.listOpenPositions();
       if (openPositions.length > 0) {
+        const freshPrices = new Map<string, number>();
         let fetchedCount = 0;
         for (const pos of openPositions) {
-          if (!candidatePrices.has(pos.address)) {
-            try {
-              const candidate = await this.dex.fetchByTokenAddress(pos.address);
-              if (candidate && candidate.priceUsd > 0) {
-                candidatePrices.set(candidate.address, candidate.priceUsd);
-                fetchedCount++;
-              }
-              await sleep(500);
-            } catch (e) {
-              console.warn(`[SL/TP] Could not fetch price for ${pos.symbol}:`, e);
+          try {
+            const candidate = await this.dex.fetchByTokenAddress(pos.address);
+            if (candidate && candidate.priceUsd > 0) {
+              freshPrices.set(candidate.address, candidate.priceUsd);
+              fetchedCount++;
             }
+            await sleep(500);
+          } catch (e) {
+            console.warn(`[SL/TP] Could not fetch price for ${pos.symbol}:`, e);
           }
         }
         if (fetchedCount > 0) {
-          console.log(`[SL/TP] Fetched ${fetchedCount} additional prices for open positions`);
+          console.log(`[SL/TP] Fetched ${fetchedCount} fresh prices for open positions`);
         }
-        const triggered = this.repo.positions.checkTriggers(candidatePrices);
+        const triggered = this.repo.positions.checkTriggers(freshPrices);
         for (const closed of triggered) {
           this.repo.creditWallet(closed.amount_sol);
           this.broadcast("POSITION_CLOSED", closed);
