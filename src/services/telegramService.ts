@@ -264,14 +264,20 @@ export class TelegramService {
         autoFilled = true;
       }
 
-      const pos = this.repo.positions.openPosition({
-        address: screened.address,
-        symbol:  screened.symbol,
-        entryPrice: screened.priceUsd,
-        amountSol:  amount,
-        slPct, tpPct,
-        trailingStopPct: trailPct && !isNaN(trailPct) ? trailPct : null,
-      });
+      let pos;
+      try {
+        pos = this.repo.positions.openPosition({
+          address: screened.address,
+          symbol:  screened.symbol,
+          entryPrice: screened.priceUsd,
+          amountSol:  amount,
+          slPct, tpPct,
+          trailingStopPct: trailPct && !isNaN(trailPct) ? trailPct : null,
+        });
+      } catch {
+        this.repo.creditWallet(amount);
+        return ctx.reply(`❌ Already have an open position for $${screened.symbol}`);
+      }
 
       const moonshotNote = screened.moonshot.isMoonshotCandidate
         ? `\n🚀 Moonshot candidate (score ${screened.moonshot.moonshotScore}/100) — suggested ceiling ${screened.moonshot.suggestedTpMultiplier}x`

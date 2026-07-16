@@ -214,19 +214,23 @@ export async function buildServer(
       return reply.status(404).send({ error: "Token not found on DexScreener" });
     }
 
-    const pos = repo.positions.openPosition({
-      address:    screened.address,
-      symbol:     screened.symbol,
-      entryPrice: screened.priceUsd,
-      amountSol,
-      slPct:           slPct           ?? null,
-      tpPct:           tpPct           ?? null,
-      trailingStopPct: trailingStopPct ?? null,
-      notes:  notes  ?? undefined,
-    });
-
-    broadcast("POSITION_OPENED", pos);
-    return reply.status(201).send({ position: pos, walletBalance: repo.getWalletBalance() });
+    try {
+      const pos = repo.positions.openPosition({
+        address:    screened.address,
+        symbol:     screened.symbol,
+        entryPrice: screened.priceUsd,
+        amountSol,
+        slPct:           slPct           ?? null,
+        tpPct:           tpPct           ?? null,
+        trailingStopPct: trailingStopPct ?? null,
+        notes:  notes  ?? undefined,
+      });
+      broadcast("POSITION_OPENED", pos);
+      return reply.status(201).send({ position: pos, walletBalance: repo.getWalletBalance() });
+    } catch (e) {
+      repo.creditWallet(amountSol);
+      return reply.status(409).send({ error: (e as Error).message });
+    }
   });
 
   app.post<{

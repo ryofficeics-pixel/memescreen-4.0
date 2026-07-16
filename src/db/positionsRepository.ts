@@ -66,6 +66,13 @@ export class PositionsRepository {
 
   // ── Open positions ────────────────────────────────────────────────────────
   openPosition(p: Omit<Position, "id" | "openedAt" | "status"> & { notes?: string }): PositionRow {
+    // Reject duplicate: already an open position for this address
+    const existing = this.db.prepare(
+      `SELECT id FROM positions WHERE address = ? AND status = 'open' LIMIT 1`
+    ).get(p.address);
+    if (existing) {
+      throw new Error(`Position already open for ${p.symbol} (${p.address})`);
+    }
     const id = randomUUID();
     this.db.prepare(`
       INSERT INTO positions (id, address, symbol, entry_price, amount_sol, sl_pct, tp_pct, trailing_stop_pct, peak_price, notes)
