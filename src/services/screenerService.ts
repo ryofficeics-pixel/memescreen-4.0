@@ -376,7 +376,11 @@ export class ScreenerService {
     const openPositions = this.repo.positions.listOpenPositions();
     if (openPositions.length >= this.env.AUTO_TRADE_MAX_POSITIONS) return;
 
-    const amountSol = this.env.AUTO_TRADE_SOL_PER_TRADE;
+    // Scale trade size by score: 0.1 SOL (min score) → 0.3 SOL (100)
+    const minScore = this.env.AUTO_TRADE_MIN_SCORE;
+    const score = screened.finalScore;
+    const ratio = Math.min(1, Math.max(0, (score - minScore) / (100 - minScore)));
+    const amountSol = +(0.1 + ratio * 0.2).toFixed(2);
     if (!this.repo.deductWallet(amountSol)) return;
 
     try {
