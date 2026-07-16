@@ -63,6 +63,13 @@ async function main() {
   }, 60_000);
   console.log("[SL/TP] Background check every 60s");
 
+  // 9c. Self-audit every 12 minutes — verifies SL/TP can reach every open position
+  setInterval(async () => {
+    const warnings = await screener.auditSlTp();
+    for (const w of warnings) console.log(`[AUDIT] ⚠ ${w}`);
+  }, 12 * 60 * 1000);
+  console.log("[AUDIT] SL/TP price-source health check every 12 minutes");
+
   // 10. Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\n[SHUTDOWN] ${signal}`);

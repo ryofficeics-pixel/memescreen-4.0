@@ -405,6 +405,36 @@ export class ScreenerService {
     }
   }
 
+  // ── Self-audit: verify every open position has a reachable price source ───
+  /** Returns warnings for positions where neither DexScreener nor Jupiter returns a price. */
+  async auditSlTp(): Promise<string[]> {
+    const positions = this.repo.positions.listOpenPositions();
+    const warnings: string[] = [];
+    for (const pos of positions) {
+      let dexOk = false, jupOk = false;
+      try {
+        const c = await this.dex.fetchByTokenAddress(pos.address);
+        dexOk = !!(c && c.priceUsd > 0);
+      } catch { /* no */ }
+      if (!dexOk) {
+        try {
+          const resp = await fetch(`https://api.jup.ag/price/v2?ids=${pos.address}`, {
+            headers: { "User-Agent": "memescreener/4.0" },
+            signal:  AbortSignal.timeout(6000),
+          });
+          if (resp.ok) {
+            const body = (await resp.json()) as { data?: Record<string, { price?: string }> };
+            jupOk = !!(body.data?.[pos.address]?.price && Number(body.data[pos.address].price) > 0);
+          }
+        } catch { /* no */ }
+      }
+      if (!dexOk && !jupOk) {
+        warnings.push(`${pos.symbol} — no price from DexScreener or Jupiter. SL/TP blind.`);
+      }
+    }
+    return warnings;
+  }
+
   // ── Auto-trade: paper-buy alert tokens automatically ─────────────────────
   private async autoTrade(screened: ScreenedTokenV40): Promise<void> {
     const tierRank: Record<string, number> = { S: 4, A: 3, B: 2, C: 1, REJECT: 0 };
