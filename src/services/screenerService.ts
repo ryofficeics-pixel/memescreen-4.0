@@ -386,8 +386,8 @@ export class ScreenerService {
         entryPrice: screened.priceUsd,
         amountSol,
         slPct: screened.moonshot.suggestedSlPct ?? 25,
-        tpPct: null, // rely on trailing stop if moonshot suggests one
-        trailingStopPct: screened.moonshot.isMoonshotCandidate ? 30 : null,
+        tpPct: 20, // fixed 20% take-profit for compounding
+        trailingStopPct: null,
       });
       this.broadcast("POSITION_OPENED", pos);
       console.log(`[AUTO] Bought $${screened.symbol} ${amountSol} SOL @ $${screened.priceUsd}`);
