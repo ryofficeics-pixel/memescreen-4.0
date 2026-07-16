@@ -71,7 +71,7 @@ function handleMsg({ type, data }) {
       updateStats(data.lastScan);
       loadAlerts(data.alerts || []);
       refreshTgStatus(data.alertsLastHour);
-      startCountdown();
+      startCountdown(data.scanIntervalMinutes ?? 30);
       // Start on positions tab — load positions and show positionsView
       loadPositions();
       document.getElementById("positionsView").style.display = "flex";
@@ -104,7 +104,7 @@ function handleMsg({ type, data }) {
       prog(100, "");
       setTimeout(() => prog(0, ""), 2000);
       updateStats(data.summary);
-      startCountdown();
+      startCountdown(nextScanSecs > 0 ? Math.ceil(nextScanSecs / 60) : 30);
       break;
 
     case "ALERT":
@@ -668,9 +668,9 @@ function refreshTgStatus(alertsH) {
   if (el) el.textContent = alertsH ?? "—";
 }
 
-function startCountdown() {
+function startCountdown(intervalMinutes = 30) {
   clearInterval(countdownTimer);
-  nextScanSecs = 30 * 60;
+  nextScanSecs = intervalMinutes * 60;
   countdownTimer = setInterval(() => {
     nextScanSecs--;
     if (nextScanSecs <= 0) { clearInterval(countdownTimer); return; }

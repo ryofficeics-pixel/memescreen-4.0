@@ -81,6 +81,7 @@ export async function buildServer(
         lastScan:        snap.lastScan,
         alertsLastHour:  snap.alertsLastHour,
         scanning:        screener.scanning,
+        scanIntervalMinutes: env.SCAN_INTERVAL_MINUTES,
         ts:              new Date().toISOString(),
       },
     }));
